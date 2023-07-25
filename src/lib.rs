@@ -204,6 +204,39 @@ pub use policy::{Expiry, Policy};
 #[cfg_attr(docsrs, doc(cfg(feature = "unstable-debug-counters")))]
 pub use common::concurrent::debug_counters::GlobalDebugCounters;
 
+/// Key equivalence trait.
+///
+/// This trait defines the function used to compare the input value with the
+/// map keys (or set values) during a lookup operation such as [`HashMap::get`]
+/// or [`HashSet::contains`].
+/// It is provided with a blanket implementation based on the
+/// [`Borrow`](core::borrow::Borrow) trait.
+///
+/// # Correctness
+///
+/// Equivalent values must hash to the same value.
+pub trait Equivalent<K: ?Sized> {
+    /// Checks if this value is equivalent to the given key.
+    ///
+    /// Returns `true` if both values are equivalent, and `false` otherwise.
+    ///
+    /// # Correctness
+    ///
+    /// When this function returns `true`, both `self` and `key` must hash to
+    /// the same value.
+    fn equivalent(&self, key: &K) -> bool;
+}
+
+impl<Q: ?Sized, K: ?Sized> Equivalent<K> for Q
+where
+    Q: Eq,
+    K: core::borrow::Borrow<Q>,
+{
+    fn equivalent(&self, key: &K) -> bool {
+        self == key.borrow()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[cfg(trybuild)]

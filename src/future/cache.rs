@@ -15,7 +15,7 @@ use crate::{
     notification::{self, EvictionListener},
     policy::ExpirationPolicy,
     sync_base::base_cache::{BaseCache, HouseKeeperArc},
-    Entry, Policy, PredicateError,
+    Entry, Equivalent, Policy, PredicateError,
 };
 
 #[cfg(feature = "unstable-debug-counters")]
@@ -876,8 +876,7 @@ where
     /// on the borrowed form _must_ match those for the key type.
     pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         self.base.contains_key_with_hash(key, self.base.hash(key))
     }
@@ -894,8 +893,7 @@ where
     /// [rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
     pub fn get<Q>(&self, key: &Q) -> Option<V>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         self.base
             .get_with_hash(key, self.base.hash(key), false)
@@ -1391,8 +1389,7 @@ where
     /// on the borrowed form _must_ match those for the key type.
     pub async fn invalidate<Q>(&self, key: &Q)
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         let hash = self.base.hash(key);
         self.invalidate_with_hash(key, hash, false).await;
@@ -1407,8 +1404,7 @@ where
     /// on the borrowed form _must_ match those for the key type.
     pub async fn remove<Q>(&self, key: &Q) -> Option<V>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         let hash = self.base.hash(key);
         self.invalidate_with_hash(key, hash, true).await
@@ -1416,8 +1412,7 @@ where
 
     pub async fn invalidate_with_hash<Q>(&self, key: &Q, hash: u64, need_value: bool) -> Option<V>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         match self.base.remove_entry(key, hash) {
             None => None,
@@ -1452,8 +1447,7 @@ where
 
     fn do_blocking_invalidate<Q>(&self, key: &Q)
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         let hash = self.base.hash(key);
         if let Some(kv) = self.base.remove_entry(key, hash) {
@@ -1634,9 +1628,12 @@ where
         mut replace_if: Option<impl FnMut(&V) -> bool>,
         need_key: bool,
     ) -> Entry<K, V> {
-        let maybe_entry =
-            self.base
-                .get_with_hash_and_ignore_if(&key, hash, replace_if.as_mut(), need_key);
+        let maybe_entry = self.base.get_with_hash_and_ignore_if(
+            key.as_ref(),
+            hash,
+            replace_if.as_mut(),
+            need_key,
+        );
         if let Some(entry) = maybe_entry {
             entry
         } else {
@@ -1681,7 +1678,7 @@ where
 
         let get = || {
             self.base
-                .get_with_hash_without_recording(&key, hash, replace_if.as_mut())
+                .get_with_hash_without_recording(key.as_ref(), hash, replace_if.as_mut())
         };
         let insert = |v| self.insert_with_hash(key.clone(), hash, v).boxed();
 
@@ -1714,7 +1711,7 @@ where
         hash: u64,
         init: impl FnOnce() -> V,
     ) -> Entry<K, V> {
-        match self.base.get_with_hash(&key, hash, true) {
+        match self.base.get_with_hash(key.as_ref(), hash, true) {
             Some(entry) => entry,
             None => {
                 let value = init();
@@ -1757,7 +1754,7 @@ where
     where
         F: Future<Output = Option<V>>,
     {
-        let entry = self.base.get_with_hash(&key, hash, need_key);
+        let entry = self.base.get_with_hash(key.as_ref(), hash, need_key);
         if entry.is_some() {
             return entry;
         }
@@ -1803,7 +1800,7 @@ where
         let get = || {
             let ignore_if = None as Option<&mut fn(&V) -> bool>;
             self.base
-                .get_with_hash_without_recording(&key, hash, ignore_if)
+                .get_with_hash_without_recording(key.as_ref(), hash, ignore_if)
         };
         let insert = |v| self.insert_with_hash(key.clone(), hash, v).boxed();
 
@@ -1841,7 +1838,7 @@ where
         F: Future<Output = Result<V, E>>,
         E: Send + Sync + 'static,
     {
-        if let Some(entry) = self.base.get_with_hash(&key, hash, need_key) {
+        if let Some(entry) = self.base.get_with_hash(key.as_ref(), hash, need_key) {
             return Ok(entry);
         }
 
@@ -1886,7 +1883,7 @@ where
         let get = || {
             let ignore_if = None as Option<&mut fn(&V) -> bool>;
             self.base
-                .get_with_hash_without_recording(&key, hash, ignore_if)
+                .get_with_hash_without_recording(key.as_ref(), hash, ignore_if)
         };
         let insert = |v| self.insert_with_hash(key.clone(), hash, v).boxed();
 
@@ -2041,8 +2038,7 @@ where
     /// on the borrowed form _must_ match those for the key type.
     pub fn invalidate<Q>(&self, key: &Q)
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         self.0.do_blocking_invalidate(key)
     }

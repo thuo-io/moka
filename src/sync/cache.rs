@@ -18,7 +18,7 @@ use crate::{
         base_cache::{BaseCache, HouseKeeperArc},
         iter::ScanningGet,
     },
-    Entry, Policy, PredicateError,
+    Entry, Equivalent, Policy, PredicateError,
 };
 
 use crossbeam_channel::{Sender, TrySendError};
@@ -1006,16 +1006,14 @@ where
     /// on the borrowed form _must_ match those for the key type.
     pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         self.base.contains_key_with_hash(key, self.base.hash(key))
     }
 
     pub(crate) fn contains_key_with_hash<Q>(&self, key: &Q, hash: u64) -> bool
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         self.base.contains_key_with_hash(key, hash)
     }
@@ -1032,8 +1030,7 @@ where
     /// [rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
     pub fn get<Q>(&self, key: &Q) -> Option<V>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         self.base
             .get_with_hash(key, self.base.hash(key), false)
@@ -1042,8 +1039,7 @@ where
 
     pub(crate) fn get_with_hash<Q>(&self, key: &Q, hash: u64, need_key: bool) -> Option<Entry<K, V>>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         self.base.get_with_hash(key, hash, need_key)
     }
@@ -1231,7 +1227,7 @@ where
         need_key: bool,
     ) -> Entry<K, V> {
         self.base
-            .get_with_hash_and_ignore_if(&key, hash, replace_if.as_mut(), need_key)
+            .get_with_hash_and_ignore_if(key.as_ref(), hash, replace_if.as_mut(), need_key)
             .unwrap_or_else(|| self.insert_with_hash_and_fun(key, hash, init, replace_if, need_key))
     }
 
@@ -1270,7 +1266,7 @@ where
     ) -> Entry<K, V> {
         let get = || {
             self.base
-                .get_with_hash_without_recording(&key, hash, replace_if.as_mut())
+                .get_with_hash_without_recording(key.as_ref(), hash, replace_if.as_mut())
         };
         let insert = |v| self.insert_with_hash(key.clone(), hash, v);
 
@@ -1302,7 +1298,7 @@ where
         hash: u64,
         init: impl FnOnce() -> V,
     ) -> Entry<K, V> {
-        match self.base.get_with_hash(&key, hash, true) {
+        match self.base.get_with_hash(key.as_ref(), hash, true) {
             Some(entry) => entry,
             None => {
                 let value = init();
@@ -1453,7 +1449,7 @@ where
     where
         F: FnOnce() -> Option<V>,
     {
-        let entry = self.get_with_hash(&key, hash, need_key);
+        let entry = self.get_with_hash(key.as_ref(), hash, need_key);
         if entry.is_some() {
             return entry;
         }
@@ -1495,7 +1491,7 @@ where
         let get = || {
             let ignore_if = None as Option<&mut fn(&V) -> bool>;
             self.base
-                .get_with_hash_without_recording(&key, hash, ignore_if)
+                .get_with_hash_without_recording(key.as_ref(), hash, ignore_if)
         };
         let insert = |v| self.insert_with_hash(key.clone(), hash, v);
 
@@ -1648,7 +1644,7 @@ where
         F: FnOnce() -> Result<V, E>,
         E: Send + Sync + 'static,
     {
-        if let Some(entry) = self.get_with_hash(&key, hash, need_key) {
+        if let Some(entry) = self.get_with_hash(key.as_ref(), hash, need_key) {
             return Ok(entry);
         }
 
@@ -1690,7 +1686,7 @@ where
         let get = || {
             let ignore_if = None as Option<&mut fn(&V) -> bool>;
             self.base
-                .get_with_hash_without_recording(&key, hash, ignore_if)
+                .get_with_hash_without_recording(key.as_ref(), hash, ignore_if)
         };
         let insert = |v| self.insert_with_hash(key.clone(), hash, v);
 
@@ -1754,8 +1750,7 @@ where
     /// on the borrowed form _must_ match those for the key type.
     pub fn invalidate<Q>(&self, key: &Q)
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         let hash = self.base.hash(key);
         self.invalidate_with_hash(key, hash, false);
@@ -1770,8 +1765,7 @@ where
     /// on the borrowed form _must_ match those for the key type.
     pub fn remove<Q>(&self, key: &Q) -> Option<V>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         let hash = self.base.hash(key);
         self.invalidate_with_hash(key, hash, true)
@@ -1779,8 +1773,7 @@ where
 
     pub(crate) fn invalidate_with_hash<Q>(&self, key: &Q, hash: u64, need_value: bool) -> Option<V>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         // Lock the key for removal if blocking removal notification is enabled.
         let mut kl = None;
