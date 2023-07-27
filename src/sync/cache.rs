@@ -2065,7 +2065,7 @@ mod tests {
             DeliveryMode, RemovalCause,
         },
         policy::test_utils::ExpiryCallCounters,
-        Expiry,
+        Equivalent, Expiry,
     };
 
     use parking_lot::Mutex;
@@ -4700,6 +4700,74 @@ mod tests {
         assert!(debug_str.contains(r#"'b': "bob""#));
         assert!(debug_str.contains(r#"'c': "cindy""#));
         assert!(debug_str.ends_with('}'));
+    }
+
+    #[test]
+    fn test_equivalent_keys() {
+        #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+        struct Key {
+            id: u32,
+            values: Vec<String>,
+            variant: Variant,
+        }
+
+        #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+        enum Variant {
+            Single(String),
+            Composite(Vec<String>),
+        }
+
+        #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+        struct KeyRef<'a> {
+            id: &'a u32,
+            values: &'a [&'a str],
+            variant: VariantRef<'a>,
+        }
+
+        #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+        enum VariantRef<'a> {
+            Single(&'a str),
+            Composite(&'a [&'a str]),
+        }
+
+        impl<'a> Equivalent<Key> for KeyRef<'a> {
+            fn equivalent(&self, key: &Key) -> bool {
+                self.id == &key.id
+                    && self.values == key.values
+                    && match (&self.variant, &key.variant) {
+                        (VariantRef::Single(v1), Variant::Single(v2)) => v1 == v2,
+                        (VariantRef::Composite(v1), Variant::Composite(v2)) => v1 == v2,
+                        _ => false,
+                    }
+            }
+        }
+
+        const MAX_CAPACITY: u32 = 500;
+
+        let mut cache = Cache::builder().max_capacity(MAX_CAPACITY as u64).build();
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        let values = ["hello", "world", "!"];
+
+        let key = Key {
+            id: 123,
+            values: values.iter().map(|&t| t.to_owned()).collect(),
+            variant: Variant::Single("json".to_owned()),
+        };
+
+        cache.insert(key, 321);
+
+        let key_ref = KeyRef {
+            id: &123,
+            values: &values,
+            variant: VariantRef::Single("json"),
+        };
+
+        assert!(cache.contains_key(&key_ref));
+        assert_eq!(cache.get(&key_ref).unwrap(), 321);
     }
 
     type NotificationTuple<K, V> = (Arc<K>, V, RemovalCause);
