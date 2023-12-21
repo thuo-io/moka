@@ -2093,7 +2093,7 @@ where
                     if !kd.is_dirty() {
                         if let Some(ts) = kd.last_modified() {
                             let key = kd.key();
-                            let hash = self.hash(key);
+                            let hash = self.hash(key.as_ref());
                             candidates.push(KeyDateLite::new(key, hash, ts));
                             len += 1;
                         }

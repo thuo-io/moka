@@ -29,7 +29,7 @@ use crate::{
     notification::{AsyncEvictionListener, RemovalCause},
     policy::ExpirationPolicy,
     sync_base::iter::ScanningGet,
-    Entry, Expiry, Policy, PredicateError,
+    Entry, Equivalent, Expiry, Policy, PredicateError,
 };
 
 #[cfg(feature = "unstable-debug-counters")]
@@ -207,16 +207,14 @@ where
     #[inline]
     pub(crate) fn hash<Q>(&self, key: &Q) -> u64
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         self.inner.hash(key)
     }
 
     pub(crate) fn contains_key_with_hash<Q>(&self, key: &Q, hash: u64) -> bool
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         // TODO: Maybe we can just call ScanningGet::scanning_get.
         self.inner
@@ -242,8 +240,7 @@ where
         record_read: bool,
     ) -> Option<Entry<K, V>>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
         I: FnMut(&V) -> bool,
     {
         if self.is_map_disabled() {
@@ -358,8 +355,7 @@ where
 
     pub(crate) fn get_key_with_hash<Q>(&self, key: &Q, hash: u64) -> Option<Arc<K>>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         self.inner
             .get_key_value_and(key, hash, |k, _entry| Arc::clone(k))
@@ -368,8 +364,7 @@ where
     #[inline]
     pub(crate) fn remove_entry<Q>(&self, key: &Q, hash: u64) -> Option<KvEntry<K, V>>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         self.inner.remove_entry(key, hash)
     }
@@ -418,24 +413,25 @@ where
     }
 
     fn scanning_get(&self, key: &Arc<K>) -> Option<V> {
-        let hash = self.hash(key);
-        self.inner.get_key_value_and_then(key, hash, |k, entry| {
-            let i = &self.inner;
-            let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), &i.valid_after());
-            let now = self.current_time_from_expiration_clock();
+        let hash = self.hash(key.as_ref());
+        self.inner
+            .get_key_value_and_then(key.as_ref(), hash, |k, entry| {
+                let i = &self.inner;
+                let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), &i.valid_after());
+                let now = self.current_time_from_expiration_clock();
 
-            if is_expired_by_per_entry_ttl(entry.entry_info(), now)
-                || is_expired_entry_wo(ttl, va, entry, now)
-                || is_expired_entry_ao(tti, va, entry, now)
-                || i.is_invalidated_entry(k, entry)
-            {
-                // Expired or invalidated entry.
-                None
-            } else {
-                // Valid entry.
-                Some(entry.value.clone())
-            }
-        })
+                if is_expired_by_per_entry_ttl(entry.entry_info(), now)
+                    || is_expired_entry_wo(ttl, va, entry, now)
+                    || is_expired_entry_ao(tti, va, entry, now)
+                    || i.is_invalidated_entry(k, entry)
+                {
+                    // Expired or invalidated entry.
+                    None
+                } else {
+                    // Valid entry.
+                    Some(entry.value.clone())
+                }
+            })
     }
 
     fn keys(&self, cht_segment: usize) -> Option<Vec<Arc<K>>> {
@@ -1244,8 +1240,7 @@ where
     #[inline]
     fn hash<Q>(&self, key: &Q) -> u64
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         let mut hasher = self.build_hasher.build_hasher();
         key.hash(&mut hasher);
@@ -1255,33 +1250,33 @@ where
     #[inline]
     fn get_key_value_and<Q, F, T>(&self, key: &Q, hash: u64, with_entry: F) -> Option<T>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
         F: FnOnce(&Arc<K>, &TrioArc<ValueEntry<K, V>>) -> T,
     {
+        let equivalent = equivalent(key);
         self.cache
-            .get_key_value_and(hash, |k| (k as &K).borrow() == key, with_entry)
+            .get_key_value_and(hash, |k| equivalent(k as &K), with_entry)
     }
 
     #[inline]
     fn get_key_value_and_then<Q, F, T>(&self, key: &Q, hash: u64, with_entry: F) -> Option<T>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
         F: FnOnce(&Arc<K>, &TrioArc<ValueEntry<K, V>>) -> Option<T>,
     {
+        let equivalent = equivalent(key);
         self.cache
-            .get_key_value_and_then(hash, |k| (k as &K).borrow() == key, with_entry)
+            .get_key_value_and_then(hash, |k| equivalent(k as &K), with_entry)
     }
 
     #[inline]
     fn remove_entry<Q>(&self, key: &Q, hash: u64) -> Option<KvEntry<K, V>>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
+        let equivalent = equivalent(key);
         self.cache
-            .remove_entry(hash, |k| (k as &K).borrow() == key)
+            .remove_entry(hash, |k| equivalent(k as &K))
             .map(|(key, entry)| KvEntry::new(key, entry))
     }
 
@@ -1363,6 +1358,26 @@ where
         }
         maybe_entry
     }
+}
+
+// /// Ensures that a single closure type across uses of this which, in turn prevents multiple
+// /// instances of any functions like RawTable::reserve from being generated
+// #[cfg_attr(feature = "inline-more", inline)]
+// fn equivalent_key<Q, K, V>(k: &Q) -> impl Fn(&(K, V)) -> bool + '_
+// where
+//     Q: ?Sized + Equivalent<K>,
+// {
+//     move |x| k.equivalent(&x.0)
+// }
+
+/// Ensures that a single closure type across uses of this which, in turn prevents multiple
+/// instances of any functions like RawTable::reserve from being generated
+#[cfg_attr(feature = "inline-more", inline)]
+fn equivalent<Q, K>(k: &Q) -> impl Fn(&K) -> bool + '_
+where
+    Q: ?Sized + Equivalent<K>,
+{
+    move |x| k.equivalent(x)
 }
 
 // TODO: Calculate the batch size based on the number of entries in the cache (or an
@@ -2227,7 +2242,7 @@ where
             }
 
             let (key, cause) = key_cause.as_ref().unwrap();
-            let hash = self.hash(key);
+            let hash = self.hash(key.as_ref());
 
             // Lock the key for removal if blocking removal notification is enabled.
             let kl = self.maybe_key_lock(key);
@@ -2297,7 +2312,7 @@ where
                     if !kd.is_dirty() {
                         if let Some(ts) = kd.last_modified() {
                             let key = kd.key();
-                            let hash = self.hash(key);
+                            let hash = self.hash(key.as_ref());
                             candidates.push(KeyDateLite::new(key, hash, ts));
                             len += 1;
                         }

@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     common::concurrent::Weigher, notification::AsyncEvictionListener, policy::ExpirationPolicy,
-    Entry, Policy, PredicateError,
+    Entry, Equivalent, Policy, PredicateError,
 };
 
 #[cfg(feature = "unstable-debug-counters")]
@@ -1512,7 +1512,7 @@ where
     ) -> Entry<K, V> {
         let maybe_entry = self
             .base
-            .get_with_hash(&key, hash, replace_if.as_mut(), need_key, true)
+            .get_with_hash(key.as_ref(), hash, replace_if.as_mut(), need_key, true)
             .await;
         if let Some(entry) = maybe_entry {
             entry
@@ -1531,8 +1531,7 @@ where
         need_key: bool,
     ) -> Entry<K, V>
     where
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+        Q: ToOwned<Owned = K> + Hash + ?Sized + Equivalent<K>,
     {
         let maybe_entry = self
             .base
@@ -1586,7 +1585,7 @@ where
     ) -> Entry<K, V> {
         match self
             .base
-            .get_with_hash(&key, hash, never_ignore(), true, true)
+            .get_with_hash(key.as_ref(), hash, never_ignore(), true, true)
             .await
         {
             Some(entry) => entry,
@@ -1606,8 +1605,7 @@ where
         init: impl FnOnce() -> V,
     ) -> Entry<K, V>
     where
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+        Q: ToOwned<Owned = K> + Hash + ?Sized + Equivalent<K>,
     {
         match self
             .base
@@ -1637,7 +1635,7 @@ where
     {
         let entry = self
             .base
-            .get_with_hash(&key, hash, never_ignore(), need_key, true)
+            .get_with_hash(key.as_ref(), hash, never_ignore(), need_key, true)
             .await;
         if entry.is_some() {
             return entry;
@@ -1656,8 +1654,7 @@ where
     ) -> Option<Entry<K, V>>
     where
         F: Future<Output = Option<V>>,
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+        Q: ToOwned<Owned = K> + Hash + ?Sized + Equivalent<K>,
     {
         let entry = self
             .base
@@ -1718,7 +1715,7 @@ where
     {
         if let Some(entry) = self
             .base
-            .get_with_hash(&key, hash, never_ignore(), need_key, true)
+            .get_with_hash(key.as_ref(), hash, never_ignore(), need_key, true)
             .await
         {
             return Ok(entry);
@@ -1738,8 +1735,7 @@ where
     where
         F: Future<Output = Result<V, E>>,
         E: Send + Sync + 'static,
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+        Q: ToOwned<Owned = K> + Hash + ?Sized + Equivalent<K>,
     {
         if let Some(entry) = self
             .base
@@ -1828,8 +1824,7 @@ where
 
     async fn invalidate_with_hash<Q>(&self, key: &Q, hash: u64, need_value: bool) -> Option<V>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         use futures_util::FutureExt;
 
@@ -1951,7 +1946,7 @@ where
         I: for<'i> FnMut(&'i V) -> bool + Send,
     {
         self.base
-            .get_with_hash(key, hash, replace_if, false, false)
+            .get_with_hash(key.as_ref(), hash, replace_if, false, false)
             .await
             .map(Entry::into_value)
     }

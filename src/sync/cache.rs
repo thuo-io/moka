@@ -1814,7 +1814,7 @@ mod tests {
     use super::Cache;
     use crate::{
         common::time::Clock, notification::RemovalCause, policy::test_utils::ExpiryCallCounters,
-        Expiry,
+        Equivalent, Expiry,
     };
 
     use parking_lot::Mutex;
