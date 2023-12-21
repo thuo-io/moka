@@ -9,7 +9,7 @@ fn main() {
             .max_capacity(2)
             .time_to_live(Duration::from_secs(1))
             .eviction_listener(|key, value, cause| {
-                println!("Evicted ({:?},{:?}) because {:?}", key, value, cause)
+                println!("Evicted ({key:?},{value:?}) because {cause:?}")
             })
             .build();
         // Overload capacity of the cache.
@@ -33,11 +33,9 @@ fn main() {
         // called. If you want to remove all entries immediately, call sync() method
         // repeatedly like the loop below.
         cache.invalidate_all();
-        // This trait provides sync() method.
-        use moka::sync::ConcurrentCacheExt;
         loop {
             // Synchronization is limited to at most 500 entries for each call.
-            cache.sync();
+            cache.run_pending_tasks();
             // Check if all is done. Calling entry_count() requires calling sync()
             // first!
             if cache.entry_count() == 0 {

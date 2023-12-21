@@ -61,20 +61,17 @@ jobs:
 
       - name: Pin some dependencies to specific versions (Nightly only)
         if: ${{ matrix.rust == 'nightly' }}
-        run: |
-          cargo update -p openssl --precise 0.10.39
-          cargo update -p cc --precise 1.0.61
+        run: ./.ci_extras/pin-crate-vers-nightly.sh
 
-      # - name: Pin some dependencies to specific versions (MSRV only)
-      #   if: ${{ matrix.rust == '1.65.0' }}
-      #   run: |
-      #     cargo update -p <crate> --precise <version>
+      - name: Pin some dependencies to specific versions (MSRV only)
+        if: ${{ matrix.rust == '1.65.0' }}
+        run: ./.ci_extras/pin-crate-vers-msrv.sh
 
       - name: Show cargo tree
         uses: actions-rs/cargo@v1
         with:
           command: tree
-          args: --features future
+          args: --features 'sync, future'
 
       - name: Run tests (debug, sync feature)
         uses: actions-rs/cargo@v1
@@ -91,18 +88,6 @@ jobs:
           args: --release --features sync
         env:
           RUSTFLAGS: '--cfg rustver'
-
-      - name: Run tests (sync feature, thread-pool test for sync::Cache)
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --release --lib --features sync sync::cache::tests::enabling_and_disabling_thread_pools -- --exact --ignored
-
-      - name: Run tests (sync feature, thread-pool test for sync::SegmentedCache)
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --release --lib --features sync sync::segment::tests::enabling_and_disabling_thread_pools -- --exact --ignored
 
       - name: Run tests (sync feature, key lock test for notification)
         uses: actions-rs/cargo@v1

@@ -30,7 +30,19 @@ impl From<usize> for CacheRegion {
             1 => Self::MainProbation,
             2 => Self::MainProtected,
             3 => Self::Other,
-            _ => panic!("No such CacheRegion variant for {}", n),
+            _ => panic!("No such CacheRegion variant for {n}"),
+        }
+    }
+}
+
+#[cfg(feature = "future")]
+impl CacheRegion {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Window => "window",
+            Self::MainProbation => "main probation",
+            Self::MainProtected => "main protected",
+            Self::Other => "other",
         }
     }
 }
@@ -52,6 +64,7 @@ pub(crate) fn sketch_capacity(max_capacity: u64) -> u32 {
     max_capacity.try_into().unwrap_or(u32::MAX).max(128)
 }
 
+#[cfg(test)]
 pub(crate) fn available_parallelism() -> usize {
     use std::{num::NonZeroUsize, thread::available_parallelism};
     available_parallelism().map(NonZeroUsize::get).unwrap_or(1)

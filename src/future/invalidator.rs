@@ -7,7 +7,8 @@ use crate::{
     PredicateError,
 };
 
-use parking_lot::{Mutex, MutexGuard};
+use async_lock::{Mutex, MutexGuard};
+use async_trait::async_trait;
 use std::{
     hash::{BuildHasher, Hash},
     sync::{
@@ -22,18 +23,20 @@ pub(crate) type PredicateFun<K, V> = Arc<dyn Fn(&K, &V) -> bool + Send + Sync + 
 
 const PREDICATE_MAP_NUM_SEGMENTS: usize = 16;
 
+#[async_trait]
 pub(crate) trait GetOrRemoveEntry<K, V> {
     fn get_value_entry(&self, key: &Arc<K>, hash: u64) -> Option<TrioArc<ValueEntry<K, V>>>;
 
-    fn remove_key_value_if(
+    async fn remove_key_value_if<F>(
         &self,
         key: &Arc<K>,
         hash: u64,
-        condition: impl FnMut(&Arc<K>, &TrioArc<ValueEntry<K, V>>) -> bool,
+        condition: F,
     ) -> Option<TrioArc<ValueEntry<K, V>>>
     where
         K: Send + Sync + 'static,
-        V: Clone + Send + Sync + 'static;
+        V: Clone + Send + Sync + 'static,
+        F: for<'a, 'b> FnMut(&'a Arc<K>, &'b TrioArc<ValueEntry<K, V>>) -> bool + Send;
 }
 
 pub(crate) struct KeyDateLite<K> {
@@ -174,7 +177,7 @@ impl<K, V, S> Invalidator<K, V, S> {
         }
     }
 
-    pub(crate) fn scan_and_invalidate<C>(
+    pub(crate) async fn scan_and_invalidate<C>(
         &self,
         cache: &C,
         candidates: Vec<KeyDateLite<K>>,
@@ -186,7 +189,7 @@ impl<K, V, S> Invalidator<K, V, S> {
         V: Clone + Send + Sync + 'static,
         S: BuildHasher,
     {
-        let mut predicates = self.scan_context.predicates.lock();
+        let mut predicates = self.scan_context.predicates.lock().await;
         if predicates.is_empty() {
             *predicates = self.predicates.iter().map(|(_k, v)| v).collect();
         }
@@ -199,7 +202,7 @@ impl<K, V, S> Invalidator<K, V, S> {
             let hash = candidate.hash;
             let ts = candidate.timestamp;
             if self.apply(&predicates, cache, key, hash, ts) {
-                if let Some(entry) = Self::invalidate(cache, key, hash, ts) {
+                if let Some(entry) = Self::invalidate(cache, key, hash, ts).await {
                     invalidated.push(KvEntry {
                         key: Arc::clone(key),
                         entry,
@@ -267,7 +270,7 @@ impl<K, V, S> Invalidator<K, V, S> {
         S: BuildHasher,
     {
         let pred_map = &self.predicates;
-        for p in predicates.iter() {
+        for p in predicates {
             let hash = pred_map.hash(p.id());
             pred_map.remove(hash, |k| k == p.id());
         }
@@ -291,7 +294,7 @@ impl<K, V, S> Invalidator<K, V, S> {
         if let Some(entry) = cache.get_value_entry(key, hash) {
             if let Some(lm) = entry.last_modified() {
                 if lm == ts {
-                    return Invalidator::<_, _, S>::do_apply_predicates(
+                    return Self::do_apply_predicates(
                         predicates.iter().cloned(),
                         key,
                         &entry.value,
@@ -304,7 +307,7 @@ impl<K, V, S> Invalidator<K, V, S> {
         false
     }
 
-    fn invalidate<C>(
+    async fn invalidate<C>(
         cache: &C,
         key: &Arc<K>,
         hash: u64,
@@ -315,13 +318,15 @@ impl<K, V, S> Invalidator<K, V, S> {
         K: Send + Sync + 'static,
         V: Clone + Send + Sync + 'static,
     {
-        cache.remove_key_value_if(key, hash, |_, v| {
-            if let Some(lm) = v.last_modified() {
-                lm == ts
-            } else {
-                false
-            }
-        })
+        cache
+            .remove_key_value_if(key, hash, |_, v| {
+                if let Some(lm) = v.last_modified() {
+                    lm == ts
+                } else {
+                    false
+                }
+            })
+            .await
     }
 }
 

@@ -170,7 +170,7 @@ unsafe impl<K> Send for TimerWheel<K> {}
 impl<K> TimerWheel<K> {
     pub(crate) fn new(now: Instant) -> Self {
         Self {
-            wheels: Default::default(), // Empty.
+            wheels: Box::default(), // Empty.
             origin: now,
             current: now,
         }
@@ -327,9 +327,7 @@ impl<K> TimerWheel<K> {
         let deque = &mut self.wheels[level][index];
         debug_assert!(
             deque.len() > 0,
-            "BUG: The queue is empty. level: {}, index: {}",
-            level,
-            index
+            "BUG: The queue is empty. level: {level}, index: {index}"
         );
 
         // Rotate the nodes in the queue until we see the sentinel at the back of the
@@ -373,9 +371,6 @@ impl<K> TimerWheel<K> {
     //   which is ~584 years in nanoseconds.
     //
     fn time_nanos(&self, time: Instant) -> u64 {
-        // `TryInto` will be in the prelude starting in Rust 2021 Edition.
-        use std::convert::TryInto;
-
         let nanos_u128 = time
             .checked_duration_since(self.origin)
             // If `time` is earlier than `self.origin`, use zero. This would never
@@ -502,51 +497,44 @@ impl<'iter, K> Iterator for TimerEventsIter<'iter, K> {
             //
             // We will repeat processing this level until we see the sentinel.
             // (`pop_timer_node` will return `None` when it sees the sentinel)
-            match self.timer_wheel.pop_timer_node(self.level, i as usize) {
-                Some(node) => {
-                    let expiration_time = node.as_ref().element.entry_info().expiration_time();
-                    if let Some(t) = expiration_time {
-                        if t <= self.current_time {
-                            // The cache entry has expired. Unset the timer node from
-                            // the ValueEntry and return the node.
+            if let Some(node) = self.timer_wheel.pop_timer_node(self.level, i as usize) {
+                let expiration_time = node.as_ref().element.entry_info().expiration_time();
+                if let Some(t) = expiration_time {
+                    if t <= self.current_time {
+                        // The cache entry has expired. Unset the timer node from
+                        // the ValueEntry and return the node.
+                        node.as_ref().element.unset_timer_node_in_deq_nodes();
+                        return Some(TimerEvent::Expired(node));
+                    }
+                    // The cache entry has not expired. Reschedule it.
+                    let node_p = NonNull::new(Box::into_raw(node)).expect("Got a null ptr");
+                    match self.timer_wheel.schedule_existing_node(node_p) {
+                        ReschedulingResult::Rescheduled => {
+                            let entry_info = unsafe { node_p.as_ref() }.element.entry_info();
+                            return Some(TimerEvent::Rescheduled(TrioArc::clone(entry_info)));
+                        }
+                        ReschedulingResult::Removed(node) => {
+                            // The timer event has been removed from the timer
+                            // wheel. Unset the timer node from the ValueEntry.
                             node.as_ref().element.unset_timer_node_in_deq_nodes();
-                            return Some(TimerEvent::Expired(node));
-                        } else {
-                            // The cache entry has not expired. Reschedule it.
-                            let node_p = NonNull::new(Box::into_raw(node)).expect("Got a null ptr");
-                            match self.timer_wheel.schedule_existing_node(node_p) {
-                                ReschedulingResult::Rescheduled => {
-                                    let entry_info =
-                                        unsafe { node_p.as_ref() }.element.entry_info();
-                                    return Some(TimerEvent::Rescheduled(TrioArc::clone(
-                                        entry_info,
-                                    )));
-                                }
-                                ReschedulingResult::Removed(node) => {
-                                    // The timer event has been removed from the timer
-                                    // wheel. Unset the timer node from the ValueEntry.
-                                    node.as_ref().element.unset_timer_node_in_deq_nodes();
-                                    return Some(TimerEvent::Descheduled(node));
-                                }
-                            }
+                            return Some(TimerEvent::Descheduled(node));
                         }
                     }
                 }
-                // Done with the current queue (`None` means we just saw the
-                // sentinel). Move to the next index and/or next level.
-                None => {
-                    self.index += 1;
-                    self.is_new_index = true;
+            } else {
+                // Done with the current queue. Move to the next index
+                // and/or next level.
+                self.index += 1;
+                self.is_new_index = true;
 
-                    if self.index >= self.end_index {
-                        self.level += 1;
-                        // No more levels to process. We are done.
-                        if self.level >= BUCKET_COUNTS.len() {
-                            self.is_done = true;
-                            return None;
-                        }
-                        self.is_new_level = true;
+                if self.index >= self.end_index {
+                    self.level += 1;
+                    // No more levels to process. We are done.
+                    if self.level >= BUCKET_COUNTS.len() {
+                        self.is_done = true;
+                        return None;
                     }
+                    self.is_new_level = true;
                 }
             }
         }
@@ -664,7 +652,7 @@ mod tests {
             let entry = maybe_entry.expect("entry is none");
             match entry {
                 TimerEvent::Expired(node) => *node.element.entry_info().key_hash().key,
-                _ => panic!("Expected an expired entry. Got {:?}", entry),
+                _ => panic!("Expected an expired entry. Got {entry:?}"),
             }
         }
 
@@ -672,7 +660,7 @@ mod tests {
             let entry = maybe_entry.expect("entry is none");
             match entry {
                 TimerEvent::Rescheduled(entry) => *entry.key_hash().key,
-                _ => panic!("Expected a rescheduled entry. Got {:?}", entry),
+                _ => panic!("Expected a rescheduled entry. Got {entry:?}"),
             }
         }
 

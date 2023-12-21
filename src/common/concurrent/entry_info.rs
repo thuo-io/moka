@@ -28,7 +28,7 @@ impl<K> EntryInfo<K> {
 
         Self {
             key_hash,
-            is_admitted: Default::default(),
+            is_admitted: AtomicBool::default(),
             is_dirty: AtomicBool::new(true),
             last_accessed: AtomicInstant::new(timestamp),
             last_modified: AtomicInstant::new(timestamp),
@@ -140,8 +140,10 @@ mod test {
 
         use TargetArch::*;
 
+        #[allow(clippy::option_env_unwrap)]
         // e.g. "1.64"
-        let ver = option_env!("RUSTC_SEMVER").expect("RUSTC_SEMVER env var not set");
+        let ver =
+            option_env!("RUSTC_SEMVER").expect("RUSTC_SEMVER env var was not set at compile time");
         let is_quanta_enabled = cfg!(feature = "quanta");
         let arch = if cfg!(target_os = "linux") {
             if cfg!(target_pointer_width = "64") {
@@ -177,7 +179,7 @@ mod test {
         if let Some(size) = expected {
             assert_eq!(size_of::<EntryInfo<()>>(), size);
         } else {
-            panic!("No expected size for {:?} with Rust version {}", arch, ver);
+            panic!("No expected size for {arch:?} with Rust version {ver}");
         }
     }
 }

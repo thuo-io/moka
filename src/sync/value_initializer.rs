@@ -63,86 +63,85 @@ where
         E: Send + Sync + 'static,
     {
         use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
-        use InitResult::*;
+        use InitResult::{InitErr, ReadExisting};
 
         const MAX_RETRIES: usize = 200;
         let mut retries = 0;
 
-        let (cht_key, hash) = self.cht_key_hash(key, type_id);
+        let (w_key, w_hash) = self.waiter_key_hash(key, type_id);
+
+        let waiter = TrioArc::new(RwLock::new(None));
+        let mut lock = waiter.write();
 
         loop {
-            let waiter = TrioArc::new(RwLock::new(None));
-            let mut lock = waiter.write();
+            let Some(existing_waiter) = self.try_insert_waiter(w_key.clone(), w_hash, &waiter)
+            else {
+                break;
+            };
 
-            match self.try_insert_waiter(cht_key.clone(), hash, &waiter) {
+            // Somebody else's waiter already exists, so wait for its result to become available.
+            let waiter_result = existing_waiter.read();
+            match &*waiter_result {
+                Some(Ok(value)) => return ReadExisting(value.clone()),
+                Some(Err(e)) => return InitErr(Arc::clone(e).downcast().unwrap()),
+                // None means somebody else's init closure has been panicked.
                 None => {
-                    // Our waiter was inserted.
-                    // Check if the value has already been inserted by other thread.
-                    if let Some(value) = get() {
-                        // Yes. Set the waiter value, remove our waiter, and return
-                        // the existing value.
-                        *lock = Some(Ok(value.clone()));
-                        self.remove_waiter(cht_key, hash);
-                        return InitResult::ReadExisting(value);
-                    }
+                    retries += 1;
+                    assert!(
+                        retries < MAX_RETRIES,
+                        "Too many retries. Tried to read the return value from the `init` \
+                        closure but failed {retries} times. Maybe the `init` kept panicking?"
+                    );
 
-                    // The value still does note exist. Let's evaluate the init
-                    // closure. Catching panic is safe here as we do not try to
-                    // evaluate the closure again.
-                    match catch_unwind(AssertUnwindSafe(init)) {
-                        // Evaluated.
-                        Ok(value) => {
-                            let (waiter_val, init_res) = match post_init(value) {
-                                Ok(value) => {
-                                    insert(value.clone());
-                                    (Some(Ok(value.clone())), InitResult::Initialized(value))
-                                }
-                                Err(e) => {
-                                    let err: ErrorObject = Arc::new(e);
-                                    (
-                                        Some(Err(Arc::clone(&err))),
-                                        InitResult::InitErr(err.downcast().unwrap()),
-                                    )
-                                }
-                            };
-                            *lock = waiter_val;
-                            self.remove_waiter(cht_key, hash);
-                            return init_res;
-                        }
-                        // Panicked.
-                        Err(payload) => {
-                            *lock = None;
-                            // Remove the waiter so that others can retry.
-                            self.remove_waiter(cht_key, hash);
-                            resume_unwind(payload);
-                        }
-                    } // The write lock will be unlocked here.
-                }
-                Some(res) => {
-                    // Somebody else's waiter already exists. Drop our write lock and
-                    // wait for the read lock to become available.
-                    std::mem::drop(lock);
-                    match &*res.read() {
-                        Some(Ok(value)) => return ReadExisting(value.clone()),
-                        Some(Err(e)) => return InitErr(Arc::clone(e).downcast().unwrap()),
-                        // None means somebody else's init closure has been panicked.
-                        None => {
-                            retries += 1;
-                            if retries < MAX_RETRIES {
-                                // Retry from the beginning.
-                                continue;
-                            } else {
-                                panic!(
-                                    "Too many retries. Tried to read the return value from the `init` \
-                                closure but failed {} times. Maybe the `init` kept panicking?",
-                                    retries
-                                );
-                            }
-                        }
-                    }
+                    // Retry from the beginning.
+                    continue;
                 }
             }
         }
+
+        // Our waiter was inserted.
+
+        // Check if the value has already been inserted by other thread.
+        if let Some(value) = get() {
+            // Yes. Set the waiter value, remove our waiter, and return
+            // the existing value.
+            *lock = Some(Ok(value.clone()));
+            self.remove_waiter(w_key, w_hash);
+            return InitResult::ReadExisting(value);
+        }
+
+        // The value still does note exist. Let's evaluate the init
+        // closure. Catching panic is safe here as we do not try to
+        // evaluate the closure again.
+        match catch_unwind(AssertUnwindSafe(init)) {
+            // Evaluated.
+            Ok(value) => {
+                let (waiter_val, init_res) = match post_init(value) {
+                    Ok(value) => {
+                        insert(value.clone());
+                        (Some(Ok(value.clone())), InitResult::Initialized(value))
+                    }
+                    Err(e) => {
+                        let err: ErrorObject = Arc::new(e);
+                        (
+                            Some(Err(Arc::clone(&err))),
+                            InitResult::InitErr(err.downcast().unwrap()),
+                        )
+                    }
+                };
+                *lock = waiter_val;
+                self.remove_waiter(w_key, w_hash);
+                init_res
+            }
+            // Panicked.
+            Err(payload) => {
+                *lock = None;
+                // Remove the waiter so that others can retry.
+                self.remove_waiter(w_key, w_hash);
+                resume_unwind(payload);
+            }
+        }
+        // The write lock will be unlocked here.
     }
 
     /// The `post_init` function for the `get_with` method of cache.
@@ -184,25 +183,25 @@ where
     }
 
     #[inline]
-    fn remove_waiter(&self, cht_key: (Arc<K>, TypeId), hash: u64) {
-        self.waiters.remove(hash, |k| k == &cht_key);
+    fn remove_waiter(&self, w_key: (Arc<K>, TypeId), w_hash: u64) {
+        self.waiters.remove(w_hash, |k| k == &w_key);
     }
 
     #[inline]
     fn try_insert_waiter(
         &self,
-        cht_key: (Arc<K>, TypeId),
-        hash: u64,
+        w_key: (Arc<K>, TypeId),
+        w_hash: u64,
         waiter: &Waiter<V>,
     ) -> Option<Waiter<V>> {
         let waiter = TrioArc::clone(waiter);
-        self.waiters.insert_if_not_present(cht_key, hash, waiter)
+        self.waiters.insert_if_not_present(w_key, w_hash, waiter)
     }
 
     #[inline]
-    fn cht_key_hash(&self, key: &Arc<K>, type_id: TypeId) -> ((Arc<K>, TypeId), u64) {
-        let cht_key = (Arc::clone(key), type_id);
-        let hash = self.waiters.hash(&cht_key);
-        (cht_key, hash)
+    fn waiter_key_hash(&self, c_key: &Arc<K>, type_id: TypeId) -> ((Arc<K>, TypeId), u64) {
+        let w_key = (Arc::clone(c_key), type_id);
+        let w_hash = self.waiters.hash(&w_key);
+        (w_key, w_hash)
     }
 }

@@ -1,16 +1,16 @@
 use crate::common::{deque::DeqNode, time::Instant};
 
 use parking_lot::Mutex;
-use std::{ptr::NonNull, sync::Arc};
+use std::{fmt, ptr::NonNull, sync::Arc};
 use tagptr::TagNonNull;
 use triomphe::Arc as TrioArc;
 
 pub(crate) mod constants;
 pub(crate) mod deques;
 pub(crate) mod entry_info;
+
+#[cfg(feature = "sync")]
 pub(crate) mod housekeeper;
-pub(crate) mod thread_pool;
-pub(crate) mod unsafe_weak_pointer;
 
 // target_has_atomic is more convenient but yet unstable (Rust 1.55)
 // https://github.com/rust-lang/rust/issues/32976
@@ -103,6 +103,15 @@ pub(crate) struct KvEntry<K, V> {
 impl<K, V> KvEntry<K, V> {
     pub(crate) fn new(key: Arc<K>, entry: TrioArc<ValueEntry<K, V>>) -> Self {
         Self { key, entry }
+    }
+}
+
+impl<K, V> Clone for KvEntry<K, V> {
+    fn clone(&self) -> Self {
+        Self {
+            key: Arc::clone(&self.key),
+            entry: TrioArc::clone(&self.entry),
+        }
     }
 }
 
@@ -309,4 +318,50 @@ pub(crate) enum WriteOp<K, V> {
         new_weight: u32,
     },
     Remove(KvEntry<K, V>),
+}
+
+/// Cloning a `WriteOp` is safe and cheap because it uses `Arc` and `TrioArc` pointers to
+/// the actual data.
+impl<K, V> Clone for WriteOp<K, V> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Upsert {
+                key_hash,
+                value_entry,
+                old_weight,
+                new_weight,
+            } => Self::Upsert {
+                key_hash: key_hash.clone(),
+                value_entry: TrioArc::clone(value_entry),
+                old_weight: *old_weight,
+                new_weight: *new_weight,
+            },
+            Self::Remove(kv_hash) => Self::Remove(kv_hash.clone()),
+        }
+    }
+}
+
+impl<K, V> fmt::Debug for WriteOp<K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Upsert { .. } => f.debug_struct("Upsert").finish(),
+            Self::Remove(..) => f.debug_tuple("Remove").finish(),
+        }
+    }
+}
+
+pub(crate) struct OldEntryInfo<K, V> {
+    pub(crate) entry: TrioArc<ValueEntry<K, V>>,
+    pub(crate) last_accessed: Option<Instant>,
+    pub(crate) last_modified: Option<Instant>,
+}
+
+impl<K, V> OldEntryInfo<K, V> {
+    pub(crate) fn new(entry: &TrioArc<ValueEntry<K, V>>) -> Self {
+        Self {
+            entry: TrioArc::clone(entry),
+            last_accessed: entry.last_accessed(),
+            last_modified: entry.last_modified(),
+        }
+    }
 }

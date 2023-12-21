@@ -1,5 +1,56 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.12.1
+
+### Fixed
+
+- Fixed memory leak in `future::Cache` that occurred when `get_with()`,
+  `entry().or_insert_with()`, and similar methods were used ([#329][gh-issue-0329]).
+    - This bug was introduced in `v0.12.0`. Versions prior to `v0.12.0` do not
+      have this bug.
+
+### Changed
+
+- (Performance)  Micro-optimize `ValueInitializer` ([#331][gh-pull-0331], by
+  [@Swatinem][gh-Swatinem]).
+
+
+## Version 0.12.0
+
+> **Note**
+> `v0.12.0` has major breaking changes on the API and internal behavior.
+
+- **`sync` caches are no longer enabled by default**: Please use a crate feature
+  `sync` to enable it.
+
+- **No more background threads**: All cache types `future::Cache`, `sync::Cache`, and
+  `sync::SegmentedCache` no longer spawn background threads.
+
+  - The `scheduled-thread-pool` crate was removed from the dependency.
+  - Because of this change, many private methods and some public methods under the
+    `future` module were converted to `async` methods. You may need to add `.await`
+    to your code for those methods.
+
+- **Immediate notification delivery**: The `notification::DeliveryMode` enum for the
+  eviction listener was removed. Now all cache types behave as if the `Immediate`
+  delivery mode is specified.
+
+Please read the [MIGRATION-GUIDE.md][migration-guide-v012] for more details.
+
+[migration-guide-v012]: https://github.com/moka-rs/moka/blob/main/MIGRATION-GUIDE.md#migrating-to-v0120-from-a-prior-version
+
+### Changed
+
+- Removed the thread pool from `future` cache ([#294][gh-pull-0294]) and `sync`
+  caches ([#316][gh-pull-0316]).
+- Improved async cancellation safety of `future::Cache`. ([#309][gh-pull-0309])
+
+### Fixed
+
+- Fixed a bug that an internal `do_insert_with_hash` method gets the current
+  `Instant` too early when eviction listener is enabled. ([#322][gh-issue-0322])
+
+
 ## Version 0.11.3
 
 ### Fixed
@@ -666,6 +717,8 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-Swatinem]: https://github.com/Swatinem
 [gh-tinou98]: https://github.com/tinou98
 
+[gh-issue-0329]: https://github.com/moka-rs/moka/issues/329/
+[gh-issue-0322]: https://github.com/moka-rs/moka/issues/322/
 [gh-issue-0255]: https://github.com/moka-rs/moka/issues/255/
 [gh-issue-0252]: https://github.com/moka-rs/moka/issues/252/
 [gh-issue-0243]: https://github.com/moka-rs/moka/issues/243/
@@ -685,7 +738,11 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0331]: https://github.com/moka-rs/moka/pull/331/
+[gh-pull-0316]: https://github.com/moka-rs/moka/pull/316/
+[gh-pull-0309]: https://github.com/moka-rs/moka/pull/309/
 [gh-pull-0295]: https://github.com/moka-rs/moka/pull/295/
+[gh-pull-0294]: https://github.com/moka-rs/moka/pull/294/
 [gh-pull-0277]: https://github.com/moka-rs/moka/pull/277/
 [gh-pull-0275]: https://github.com/moka-rs/moka/pull/275/
 [gh-pull-0272]: https://github.com/moka-rs/moka/pull/272/

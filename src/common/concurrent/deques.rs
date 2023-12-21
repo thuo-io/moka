@@ -34,6 +34,19 @@ impl<K> Default for Deques<K> {
 }
 
 impl<K> Deques<K> {
+    #[cfg(feature = "future")]
+    pub(crate) fn select_mut(
+        &mut self,
+        selector: CacheRegion,
+    ) -> (&mut Deque<KeyHashDate<K>>, &mut Deque<KeyHashDate<K>>) {
+        match selector {
+            CacheRegion::Window => (&mut self.window, &mut self.write_order),
+            CacheRegion::MainProbation => (&mut self.probation, &mut self.write_order),
+            CacheRegion::MainProtected => (&mut self.protected, &mut self.write_order),
+            CacheRegion::Other => unreachable!(),
+        }
+    }
+
     pub(crate) fn push_back_ao<V>(
         &mut self,
         region: CacheRegion,
@@ -45,7 +58,7 @@ impl<K> Deques<K> {
             CacheRegion::Window => self.window.push_back(node),
             CacheRegion::MainProbation => self.probation.push_back(node),
             CacheRegion::MainProtected => self.protected.push_back(node),
-            _ => unreachable!(),
+            CacheRegion::Other => unreachable!(),
         };
         let tagged_node = TagNonNull::compose(node, region as usize);
         entry.set_access_order_q_node(Some(tagged_node));
@@ -88,15 +101,13 @@ impl<K> Deques<K> {
         if let Some(tagged_node) = entry.access_order_q_node() {
             let (node, tag) = tagged_node.decompose();
             let p = unsafe { node.as_ref() };
-            if deq.region() == tag {
-                if deq.contains(p) {
-                    unsafe { deq.move_to_back(node) };
-                }
-            } else {
-                panic!(
-                    "move_to_back_ao_in_deque - node is not a member of {} deque. {:?}",
-                    deq_name, p,
-                )
+            assert_eq!(
+                deq.region(),
+                tag,
+                "move_to_back_ao_in_deque - node is not a member of {deq_name} deque. {p:?}"
+            );
+            if deq.contains(p) {
+                unsafe { deq.move_to_back(node) };
             }
         }
     }
@@ -148,15 +159,15 @@ impl<K> Deques<K> {
         unsafe {
             match tagged_node.decompose_tag().into() {
                 CacheRegion::Window => {
-                    Self::unlink_node_ao_from_deque("window", &mut self.window, tagged_node)
+                    Self::unlink_node_ao_from_deque("window", &mut self.window, tagged_node);
                 }
                 CacheRegion::MainProbation => {
-                    Self::unlink_node_ao_from_deque("probation", &mut self.probation, tagged_node)
+                    Self::unlink_node_ao_from_deque("probation", &mut self.probation, tagged_node);
                 }
                 CacheRegion::MainProtected => {
-                    Self::unlink_node_ao_from_deque("protected", &mut self.protected, tagged_node)
+                    Self::unlink_node_ao_from_deque("protected", &mut self.protected, tagged_node);
                 }
-                _ => unreachable!(),
+                CacheRegion::Other => unreachable!(),
             }
         }
     }
@@ -168,16 +179,14 @@ impl<K> Deques<K> {
     ) {
         let (node, tag) = tagged_node.decompose();
         let p = node.as_ref();
-        if deq.region() == tag {
-            if deq.contains(p) {
-                // https://github.com/moka-rs/moka/issues/64
-                deq.unlink_and_drop(node);
-            }
-        } else {
-            panic!(
-                "unlink_node - node is not a member of {} deque. {:?}",
-                deq_name, p
-            )
+        assert_eq!(
+            deq.region(),
+            tag,
+            "unlink_node - node is not a member of {deq_name} deque. {p:?}"
+        );
+        if deq.contains(p) {
+            // https://github.com/moka-rs/moka/issues/64
+            deq.unlink_and_drop(node);
         }
     }
 

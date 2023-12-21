@@ -4,9 +4,15 @@
 [![crates.io release][release-badge]][crate]
 [![docs][docs-badge]][docs]
 [![dependency status][deps-rs-badge]][deps-rs]
-[![coverage status][coveralls-badge]][coveralls]
+<!-- [![coverage status][coveralls-badge]][coveralls] -->
 [![license][license-badge]](#license)
 [![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka?ref=badge_shield)
+
+> **note**
+> `v0.12.0` has major breaking changes on the API and internal behavior. Please read
+> the [MIGRATION-GUIDE.md][migration-guide-v012] for the details.
+
+* * *
 
 Moka is a fast, concurrent cache library for Rust. Moka is inspired by the
 [Caffeine][caffeine-git] library for Java.
@@ -42,8 +48,7 @@ high level of concurrency for concurrent access.
 
 - Thread-safe, highly concurrent in-memory cache implementations:
     - Synchronous caches that can be shared across OS threads.
-    - An asynchronous (futures aware) cache that can be accessed inside and outside
-      of asynchronous contexts.
+    - An asynchronous (futures aware) cache.
 - A cache can be bounded by one of the followings:
     - The maximum number of entries.
     - The total weighted size of entries. (Size aware eviction)
@@ -67,7 +72,7 @@ and can be overkill for your use case. Sometimes simpler caches like
 
 The following table shows the trade-offs between the different cache implementations:
 
-| Feature | Moka v0.11 | Mini Moka v0.10 | Quick Cache v0.3 |
+| Feature | Moka v0.12 | Mini Moka v0.10 | Quick Cache v0.3 |
 |:------- |:---- |:--------- |:----------- |
 | Thread-safe, sync cache | ✅ | ✅ | ✅ |
 | Thread-safe, async cache | ✅ | ❌ | ✅ |
@@ -82,10 +87,10 @@ The following table shows the trade-offs between the different cache implementat
 | Lock-free, concurrent iterator | ✅ | ❌ | ❌ |
 | Lock-per-shard, concurrent iterator | ❌ | ✅ | ❌ |
 
-| Performance, etc. | Moka v0.11 | Mini Moka v0.10 | Quick Cache v0.3 |
+| Performance, etc. | Moka v0.12 | Mini Moka v0.10 | Quick Cache v0.3 |
 |:------- |:---- |:--------- |:----------- |
 | Small overhead compared to a concurrent hash table | ❌ | ❌ | ✅ |
-| Does not use background threads | ❌ Will be removed from v0.12 or v0.13 | ✅ | ✅ |
+| Does not use background threads | ❌ → ✅ Removed from v0.12 | ✅ | ✅ |
 | Small dependency tree | ❌ | ✅ | ✅ |
 
 [tiny-lfu]: https://github.com/moka-rs/moka/wiki#admission-and-eviction-policies
@@ -110,18 +115,16 @@ routers. Here are some highlights:
 [aliyundrive-webdav-git]: https://github.com/messense/aliyundrive-webdav
 
 
-## Change Log
+## Recent Changes
 
+> **Note**
+> `v0.12.0` has major breaking changes on the API and internal behavior. Please read
+> the [MIGRATION-GUIDE.md][migration-guide-v012] for the details.
+
+- [MIGRATION-GUIDE.md][migration-guide-v012]
 - [CHANGELOG.md](https://github.com/moka-rs/moka/blob/main/CHANGELOG.md)
 
-The `unsync::Cache` and `dash::Cache` have been moved to a separate crate called
-[Mini Moka][mini-moka-crate]:
-
-- `moka::unsync::Cache` → [`mini_moka::unsync::Cache`][unsync-cache-struct]
-- `moka::dash::Cache` → [`mini_moka::sync::Cache`][dash-cache-struct]
-
-[unsync-cache-struct]: https://docs.rs/mini-moka/latest/mini_moka/unsync/struct.Cache.html
-[dash-cache-struct]: https://docs.rs/mini-moka/latest/mini_moka/sync/struct.Cache.html
+[migration-guide-v012]: https://github.com/moka-rs/moka/blob/main/MIGRATION-GUIDE.md
 
 
 ## Table of Contents
@@ -150,18 +153,14 @@ The `unsync::Cache` and `dash::Cache` have been moved to a separate crate called
 
 ## Usage
 
-Add this to your `Cargo.toml`:
+To add Moka to your dependencies, run `cargo add` as the followings:
 
-```toml
-[dependencies]
-moka = "0.11"
-```
+```console
+# To use the synchronous cache:
+cargo add moka --features sync
 
-To use the asynchronous cache, enable a crate feature called "future".
-
-```toml
-[dependencies]
-moka = { version = "0.11", features = ["future"] }
+# To use the asynchronous cache:
+cargo add moka --features future
 ```
 
 
@@ -181,7 +180,7 @@ use moka::sync::Cache;
 use std::thread;
 
 fn value(n: usize) -> String {
-    format!("value {}", n)
+    format!("value {n}")
 }
 
 fn main() {
@@ -252,7 +251,7 @@ It works with asynchronous runtime such as [Tokio][tokio-crate],
 To use the asynchronous cache, [enable a crate feature called "future"](#usage).
 
 [tokio-crate]: https://crates.io/crates/tokio
-[async-std-crate]: https://crates.io/crates/asinc-std
+[async-std-crate]: https://crates.io/crates/async-std
 [actix-rt-crate]: https://crates.io/crates/actix-rt
 
 Cache entries are manually added using an insert method, and are stored in the cache
@@ -270,7 +269,7 @@ Here is a similar program to the previous example, but using asynchronous cache 
 // Cargo.toml
 //
 // [dependencies]
-// moka = { version = "0.11", features = ["future"] }
+// moka = { version = "0.12", features = ["future"] }
 // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 // futures-util = "0.3"
 
@@ -283,7 +282,7 @@ async fn main() {
     const NUM_KEYS_PER_TASK: usize = 64;
 
     fn value(n: usize) -> String {
-        format!("value {}", n)
+        format!("value {n}")
     }
 
     // Create a cache that can store up to 10,000 entries.
@@ -304,7 +303,7 @@ async fn main() {
                     // insert() is an async method, so await it.
                     my_cache.insert(key, value(key)).await;
                     // get() returns Option<String>, a clone of the stored value.
-                    assert_eq!(my_cache.get(&key), Some(value(key)));
+                    assert_eq!(my_cache.get(&key).await, Some(value(key)));
                 }
 
                 // Invalidate every 4 element of the inserted entries.
@@ -322,9 +321,9 @@ async fn main() {
     // Verify the result.
     for key in 0..(NUM_TASKS * NUM_KEYS_PER_TASK) {
         if key % 4 == 0 {
-            assert_eq!(cache.get(&key), None);
+            assert_eq!(cache.get(&key).await, None);
         } else {
-            assert_eq!(cache.get(&key), Some(value(key)));
+            assert_eq!(cache.get(&key).await, Some(value(key)));
         }
     }
 }
@@ -482,9 +481,9 @@ to the dependency declaration.
 
 ```toml:Cargo.toml
 [dependencies]
-moka = { version = "0.11", default-features = false, features = ["sync"] }
+moka = { version = "0.12", default-features = false, features = ["sync"] }
 # Or
-moka = { version = "0.11", default-features = false, features = ["future"] }
+moka = { version = "0.12", default-features = false, features = ["future"] }
 ```
 
 This will make Moka to switch to a fall-back implementation, so it will compile.
@@ -505,14 +504,14 @@ $ RUSTFLAGS='--cfg skeptic --cfg trybuild' cargo test --all-features
 
 ```console
 $ RUSTFLAGS='--cfg skeptic --cfg trybuild' cargo test \
-    --no-default-features --features future
+    --no-default-features --features 'future, sync'
 ```
 
 **Generating the Doc**
 
 ```console
 $ cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"' \
-    doc --no-deps --features future
+    doc --no-deps --features 'future, sync'
 ```
 
 ## Road Map
@@ -526,16 +525,25 @@ $ cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"
     - `blocking_insert(K, V)` → `blocking().insert(K, V)`
     - `time_to_live()` → `policy().time_to_live()`
 - [x] Notifications on eviction. (`v0.9.0` via [#145][gh-pull-145])
-- [x] Variable (per-entry) expiration, using a hierarchical timer wheel.
+- [x] Variable (per-entry) expiration, using hierarchical timer wheels.
   (`v0.11.0` via [#248][gh-pull-248])
-- [ ] Cache statistics. (Hit rate, etc.)
+- [ ] Cache statistics (Hit rate, etc.). ([details][cache-stats])
+- [x] Remove background threads. (`v0.12.0` via [#294][gh-pull-294] and
+  [#316][gh-pull-316])
+- [ ] Restore cache from a snapshot. ([details][restore])
+- [ ] `and_compute` method. ([details][and-compute])
 - [ ] Upgrade TinyLFU to Window-TinyLFU. ([details][tiny-lfu])
 
 [gh-pull-024]: https://github.com/moka-rs/moka/pull/24
 [gh-pull-105]: https://github.com/moka-rs/moka/pull/105
 [gh-pull-145]: https://github.com/moka-rs/moka/pull/145
 [gh-pull-248]: https://github.com/moka-rs/moka/pull/248
+[gh-pull-294]: https://github.com/moka-rs/moka/pull/294
+[gh-pull-316]: https://github.com/moka-rs/moka/pull/316
 
+[and-compute]: https://github.com/moka-rs/moka/issues/227
+[cache-stats]: https://github.com/moka-rs/moka/issues/234
+[restore]: https://github.com/moka-rs/moka/issues/314
 
 ## About the Name
 
