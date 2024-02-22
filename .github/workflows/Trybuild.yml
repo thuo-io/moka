@@ -1,4 +1,4 @@
-name: Miri tests
+name: Trybuild
 
 on:
   push:
@@ -6,13 +6,6 @@ on:
     - '.devcontainer/**'
     - '.gitpod.yml'
     - '.vscode/**'
-    - 'tests/**'
-  pull_request:
-    paths-ignore:
-    - '.devcontainer/**'
-    - '.gitpod.yml'
-    - '.vscode/**'
-    - 'tests/**'
   schedule:
     # Run against the last commit on the default branch on Friday at 9pm (UTC?)
     - cron:  '0 21 * * 5'
@@ -34,21 +27,25 @@ jobs:
     needs: pre_job
     if: needs.pre_job.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
+    strategy:
+      # Continue running other jobs in the matrix even if one fails.
+      fail-fast: false
+      matrix:
+        rust:
+          - stable
+          - beta
 
     steps:
       - name: Checkout Moka
         uses: actions/checkout@v4
 
-      - name: Install Rust nightly toolchain with Miri
+      - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly
-          components: miri
+          toolchain: ${{ matrix.rust }}
 
-      - run: cargo miri setup
-
-      - name: Run Miri test (deque)
-        run: cargo miri test deque --features 'sync, future'
-
-      - name: Run Miri test (timer_wheel)
-        run: cargo miri test timer_wheel --features 'sync, future'
+      - name: Run compile error tests (sync and future features, trybuild)
+        if: ${{ matrix.rust == 'stable' }}
+        run: cargo test ui_trybuild --release --features 'sync, future'
+        env:
+          RUSTFLAGS: '--cfg trybuild'

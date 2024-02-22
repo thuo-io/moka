@@ -1,5 +1,115 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.12.5
+
+### Added
+
+- Added support for a plain LRU (Least Recently Used) eviction policy
+    ([#390][gh-pull-0390]):
+    - The LRU policy is enabled by calling the `eviction_policy` method of the cache
+      builder with a policy obtained by `EvictionPolicy::lru` function.
+    - The default eviction policy remains the TinyLFU (Tiny, Least Frequently Used)
+      as it maintains better hit rate than LRU for most use cases. TinyLFU combines
+      LRU eviction policy and popularity-based admission policy. A probabilistic data
+      structure is used to estimate historical popularity of both hit and missed
+      keys. (not only the keys currently in the cache.)
+    - However, some use cases may prefer LRU policy over TinyLFU. An example is
+      recency biased workload such as streaming data processing. LRU policy can be
+      used for them to achieve better hit rate.
+    - Note that we are planning to add an adaptive eviction/admission policy called
+      Window-TinyLFU in the future. It will adjust the balance between recency and
+      frequency based on the current workload.
+
+
+## Version 0.12.4
+
+### Fixed
+
+- Ensure `crossbeam-epoch` to run GC when dropping a cache ([#384][gh-pull-0384]):
+    - `crossbeam-epoch` crate provides an epoch-based memory reclamation scheme for
+      concurrent data structures. It is used by Moka cache to safely drop cached
+      entries while they are still being accessed by other threads.
+    - `crossbeam-epoch` does its best to reclaim memory (drop the entries evicted
+      from the cache) when the epoch is advanced. However, it does not guarantee that
+      memory will be reclaimed immediately after the epoch is advanced. This means
+      that entries can remain in the memory for a while after the cache is dropped.
+    - This fix ensures that, when a cache is dropped, the epoch is advanced and
+      `crossbeam-epoch`'s thread local buffers are flushed, helping to reclaim memory
+      immediately.
+    - Note that there are still chances that some entries remain in the memory for a
+      while after a cache is dropped. We are looking for alternatives to
+      `crossbeam-epoch` to improve this situation (e.g. [#385][gh-issue-0385]).
+
+### Added
+
+- Added an example for reinserting expired entries to the cache.
+  ([#382][gh-pull-0382])
+
+
+## Version 0.12.3
+
+### Added
+
+- Added the upsert and compute methods for modifying a cached entry
+  ([#370][gh-pull-0370]):
+    - Now the `entry` and `entry_by_ref` APIs have the following methods:
+        - `and_upsert_with` method to insert or update the entry.
+        - `and_compute_with` method to insert, update, remove or do nothing on the
+          entry.
+        - `and_try_compute_with` method, which is similar to above but returns
+          `Result`.
+
+### Fixed
+
+- Raised the version requirement of the `quanta` from `>=0.11.0, <0.12.0` to
+  `>=0.12.2, <0.13.0` to avoid under-measuring the elapsed time on Apple silicon
+  Macs ([#376][gh-pull-0376]).
+    - Due to this under-measurement, cached entries on macOS arm64 can expire sightly
+      later than expected.
+
+
+## Version 0.12.2
+
+### Fixed
+
+- Prevent timing issues in writes that cause inconsistencies between the cache's
+  internal data structures ([#348][gh-pull-0348]):
+    - One way to trigger the issue is that insert the same key twice quickly, once
+      when the cache is full and a second time when there is a room in the cache.
+      - When it occurs, the cache will not return the value inserted in the second
+        call (which is wrong), and the `entry_count` method will keep returning a non
+        zero value after calling the `invalidate_all` method (which is also wrong).
+- Now the last access time of a cached entry is updated immediately after the entry
+  is read ([#363][gh-pull-0363]):
+    - When the time-to-idle of a cache is set, the last access time of a cached entry
+      is used to determine if the entry has been expired.
+    - Before this fix, the access time was updated (to the time when it was read)
+      when pending tasks were processed. This delay caused issue that some entries
+      become temporarily unavailable for reads even though they have been accessed
+      recently. And then they will become available again after the pending tasks are
+      processed.
+    - Now the last access time is updated immediately after the entry is read. The
+      entry will remain valid until the time-to-idle has elapsed.
+
+Note that both of [#348][gh-pull-0348] and [#363][gh-pull-0363] were already present
+in `v0.11.x` and older versions. However they were less likely to occur because they
+had background threads to periodically process pending tasks. So there were much
+shorter time windows for these issues to occur.
+
+### Changed
+
+- Updated the Rust edition from 2018 to 2021. ([#339][gh-pull-0339], by
+  [@nyurik][gh-nyurik])
+    - The MSRV remains at Rust 1.65.
+- Changed to use inline format arguments throughout the code, including examples.
+  ([#340][gh-pull-0340], by [@nyurik][gh-nyurik])
+
+### Added
+
+- Added an example for cascading drop triggered by eviction ([#350][gh-pull-0350], by
+  [@peter-scholtens][gh-peter-scholtens])
+
+
 ## Version 0.12.1
 
 ### Fixed
@@ -711,12 +821,14 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-LMJW]: https://github.com/LMJW
 [gh-Milo123459]: https://github.com/Milo123459
 [gh-messense]: https://github.com/messense
+[gh-nyurik]: https://github.com/nyurik
 [gh-paolobarbolini]: https://github.com/paolobarbolini
 [gh-peter-scholtens]: https://github.com/peter-scholtens
 [gh-saethlin]: https://github.com/saethlin
 [gh-Swatinem]: https://github.com/Swatinem
 [gh-tinou98]: https://github.com/tinou98
 
+[gh-issue-0385]: https://github.com/moka-rs/moka/issues/385/
 [gh-issue-0329]: https://github.com/moka-rs/moka/issues/329/
 [gh-issue-0322]: https://github.com/moka-rs/moka/issues/322/
 [gh-issue-0255]: https://github.com/moka-rs/moka/issues/255/
@@ -738,6 +850,16 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0390]: https://github.com/moka-rs/moka/pull/390/
+[gh-pull-0384]: https://github.com/moka-rs/moka/pull/384/
+[gh-pull-0382]: https://github.com/moka-rs/moka/pull/382/
+[gh-pull-0376]: https://github.com/moka-rs/moka/pull/376/
+[gh-pull-0370]: https://github.com/moka-rs/moka/pull/370/
+[gh-pull-0363]: https://github.com/moka-rs/moka/pull/363/
+[gh-pull-0350]: https://github.com/moka-rs/moka/pull/350/
+[gh-pull-0348]: https://github.com/moka-rs/moka/pull/348/
+[gh-pull-0340]: https://github.com/moka-rs/moka/pull/340/
+[gh-pull-0339]: https://github.com/moka-rs/moka/pull/339/
 [gh-pull-0331]: https://github.com/moka-rs/moka/pull/331/
 [gh-pull-0316]: https://github.com/moka-rs/moka/pull/316/
 [gh-pull-0309]: https://github.com/moka-rs/moka/pull/309/

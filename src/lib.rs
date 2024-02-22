@@ -110,7 +110,11 @@ pub(crate) mod cht;
 pub(crate) mod common;
 
 #[cfg(any(feature = "sync", feature = "future"))]
-pub(crate) mod policy;
+#[cfg_attr(docsrs, doc(cfg(any(feature = "sync", feature = "future"))))]
+pub mod ops;
+
+#[cfg(any(feature = "sync", feature = "future"))]
+pub mod policy;
 
 #[cfg(any(feature = "sync", feature = "future"))]
 pub(crate) mod sync_base;
@@ -179,4 +183,11 @@ mod tests {
         let t = trybuild::TestCases::new();
         t.compile_fail("tests/compile_tests/future/clone/*.rs");
     }
+}
+
+#[cfg(all(doctest, feature = "sync"))]
+mod doctests {
+    // https://doc.rust-lang.org/rustdoc/write-documentation/documentation-tests.html#include-items-only-when-collecting-doctests
+    #[doc = include_str!("../README.md")]
+    struct ReadMeDoctests;
 }

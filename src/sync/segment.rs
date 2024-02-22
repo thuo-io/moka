@@ -2,7 +2,7 @@ use super::{cache::Cache, CacheBuilder, OwnedKeyEntrySelector, RefKeyEntrySelect
 use crate::{
     common::concurrent::Weigher,
     notification::EvictionListener,
-    policy::ExpirationPolicy,
+    policy::{EvictionPolicy, ExpirationPolicy},
     sync_base::iter::{Iter, ScanningGet},
     Entry, Policy, PredicateError,
 };
@@ -102,6 +102,7 @@ where
             num_segments,
             build_hasher,
             None,
+            EvictionPolicy::default(),
             None,
             ExpirationPolicy::default(),
             false,
@@ -207,6 +208,7 @@ where
         num_segments: usize,
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
+        eviction_policy: EvictionPolicy,
         eviction_listener: Option<EvictionListener<K, V>>,
         expiration_policy: ExpirationPolicy<K, V>,
         invalidator_enabled: bool,
@@ -219,6 +221,7 @@ where
                 num_segments,
                 build_hasher,
                 weigher,
+                eviction_policy,
                 eviction_listener,
                 expiration_policy,
                 invalidator_enabled,
@@ -284,12 +287,14 @@ where
         RefKeyEntrySelector::new(key, hash, cache)
     }
 
+    /// TODO: Remove this in v0.13.0.
     /// Deprecated, replaced with [`get_with`](#method.get_with)
     #[deprecated(since = "0.8.0", note = "Replaced with `get_with`")]
     pub fn get_or_insert_with(&self, key: K, init: impl FnOnce() -> V) -> V {
         self.get_with(key, init)
     }
 
+    /// TODO: Remove this in v0.13.0.
     /// Deprecated, replaced with [`try_get_with`](#method.try_get_with)
     #[deprecated(since = "0.8.0", note = "Replaced with `try_get_with`")]
     pub fn get_or_try_insert_with<F, E>(&self, key: K, init: F) -> Result<V, Arc<E>>
@@ -637,6 +642,13 @@ where
 
 // For unit tests.
 #[cfg(test)]
+impl<K, V, S> SegmentedCache<K, V, S> {
+    fn is_waiter_map_empty(&self) -> bool {
+        self.inner.segments.iter().all(Cache::is_waiter_map_empty)
+    }
+}
+
+#[cfg(test)]
 impl<K, V, S> SegmentedCache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
@@ -720,6 +732,7 @@ where
         num_segments: usize,
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
+        eviction_policy: EvictionPolicy,
         eviction_listener: Option<EvictionListener<K, V>>,
         expiration_policy: ExpirationPolicy<K, V>,
         invalidator_enabled: bool,
@@ -741,8 +754,9 @@ where
                     seg_max_capacity,
                     seg_init_capacity,
                     build_hasher.clone(),
-                    weigher.as_ref().map(Arc::clone),
-                    eviction_listener.as_ref().map(Arc::clone),
+                    weigher.clone(),
+                    eviction_policy.clone(),
+                    eviction_listener.clone(),
                     expiration_policy.clone(),
                     invalidator_enabled,
                 )
@@ -1417,6 +1431,8 @@ mod tests {
         for t in [thread1, thread2, thread3, thread4, thread5] {
             t.join().expect("Failed to join");
         }
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[test]
@@ -1546,6 +1562,8 @@ mod tests {
         ] {
             t.join().expect("Failed to join");
         }
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[test]
@@ -1684,6 +1702,8 @@ mod tests {
         ] {
             t.join().expect("Failed to join");
         }
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[test]
@@ -1813,6 +1833,8 @@ mod tests {
         ] {
             t.join().expect("Failed to join");
         }
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     // This test ensures that the `contains_key`, `get` and `invalidate` can use
