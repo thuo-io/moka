@@ -2026,7 +2026,7 @@ where
     async fn get_entry(&self, key: &Arc<K>, hash: u64) -> Option<Entry<K, V>> {
         let ignore_if = None as Option<&mut fn(&V) -> bool>;
         self.base
-            .get_with_hash(key, hash, ignore_if, true, true)
+            .get_with_hash(key.as_ref(), hash, ignore_if, true, true)
             .await
     }
 
@@ -2035,7 +2035,7 @@ where
     }
 
     async fn remove(&self, key: &Arc<K>, hash: u64) -> Option<V> {
-        self.invalidate_with_hash(key, hash, true).await
+        self.invalidate_with_hash(key.as_ref(), hash, true).await
     }
 }
 

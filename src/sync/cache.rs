@@ -1847,7 +1847,7 @@ where
     fn get_entry(&self, key: &Arc<K>, hash: u64) -> Option<Entry<K, V>> {
         let ignore_if = None as Option<&mut fn(&V) -> bool>;
         self.base
-            .get_with_hash_and_ignore_if(key, hash, ignore_if, true)
+            .get_with_hash_and_ignore_if(key.as_ref(), hash, ignore_if, true)
     }
 
     fn insert(&self, key: Arc<K>, hash: u64, value: V) {
@@ -1855,7 +1855,7 @@ where
     }
 
     fn remove(&self, key: &Arc<K>, hash: u64) -> Option<V> {
-        self.invalidate_with_hash(key, hash, true)
+        self.invalidate_with_hash(key.as_ref(), hash, true)
     }
 }
 

@@ -2071,7 +2071,8 @@ where
 
     #[inline]
     fn skip_updated_entry_wo(&self, key: &K, hash: u64, deqs: &mut Deques<K>) {
-        if let Some(entry) = self.cache.get(hash, |k| (k.borrow() as &K) == key) {
+        let equivalent = equivalent(key);
+        if let Some(entry) = self.cache.get(hash, |k| equivalent(k as &K)) {
             // The key exists and the entry may have been read or updated by other
             // thread.
             deqs.move_to_back_ao(&entry);
