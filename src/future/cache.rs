@@ -9,7 +9,7 @@ use crate::{
     notification::AsyncEvictionListener,
     ops::compute::{self, CompResult},
     policy::{EvictionPolicy, ExpirationPolicy},
-    Entry, Policy, PredicateError,
+    Entry, Equivalent, Policy, PredicateError,
 };
 
 #[cfg(feature = "unstable-debug-counters")]
@@ -856,8 +856,7 @@ where
     /// on the borrowed form _must_ match those for the key type.
     pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         self.base.contains_key_with_hash(key, self.base.hash(key))
     }
@@ -874,8 +873,7 @@ where
     /// [rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
     pub async fn get<Q>(&self, key: &Q) -> Option<V>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         let ignore_if = None as Option<&mut fn(&V) -> bool>;
 
@@ -1354,8 +1352,7 @@ where
     /// on the borrowed form _must_ match those for the key type.
     pub async fn invalidate<Q>(&self, key: &Q)
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         let hash = self.base.hash(key);
         self.invalidate_with_hash(key, hash, false).await;
@@ -1370,8 +1367,7 @@ where
     /// on the borrowed form _must_ match those for the key type.
     pub async fn remove<Q>(&self, key: &Q) -> Option<V>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         let hash = self.base.hash(key);
         self.invalidate_with_hash(key, hash, true).await
@@ -1528,7 +1524,7 @@ where
     ) -> Entry<K, V> {
         let maybe_entry = self
             .base
-            .get_with_hash(&key, hash, replace_if.as_mut(), need_key, true)
+            .get_with_hash(key.as_ref(), hash, replace_if.as_mut(), need_key, true)
             .await;
         if let Some(entry) = maybe_entry {
             entry
@@ -1547,8 +1543,7 @@ where
         need_key: bool,
     ) -> Entry<K, V>
     where
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+        Q: ToOwned<Owned = K> + Hash + ?Sized + Equivalent<K>,
     {
         let maybe_entry = self
             .base
@@ -1602,7 +1597,7 @@ where
     ) -> Entry<K, V> {
         match self
             .base
-            .get_with_hash(&key, hash, never_ignore(), true, true)
+            .get_with_hash(key.as_ref(), hash, never_ignore(), true, true)
             .await
         {
             Some(entry) => entry,
@@ -1622,8 +1617,7 @@ where
         init: impl FnOnce() -> V,
     ) -> Entry<K, V>
     where
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+        Q: ToOwned<Owned = K> + Hash + ?Sized + Equivalent<K>,
     {
         match self
             .base
@@ -1653,7 +1647,7 @@ where
     {
         let entry = self
             .base
-            .get_with_hash(&key, hash, never_ignore(), need_key, true)
+            .get_with_hash(key.as_ref(), hash, never_ignore(), need_key, true)
             .await;
         if entry.is_some() {
             return entry;
@@ -1672,8 +1666,7 @@ where
     ) -> Option<Entry<K, V>>
     where
         F: Future<Output = Option<V>>,
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+        Q: ToOwned<Owned = K> + Hash + ?Sized + Equivalent<K>,
     {
         let entry = self
             .base
@@ -1734,7 +1727,7 @@ where
     {
         if let Some(entry) = self
             .base
-            .get_with_hash(&key, hash, never_ignore(), need_key, true)
+            .get_with_hash(key.as_ref(), hash, never_ignore(), need_key, true)
             .await
         {
             return Ok(entry);
@@ -1754,8 +1747,7 @@ where
     where
         F: Future<Output = Result<V, E>>,
         E: Send + Sync + 'static,
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+        Q: ToOwned<Owned = K> + Hash + ?Sized + Equivalent<K>,
     {
         if let Some(entry) = self
             .base
@@ -1903,8 +1895,7 @@ where
 
     async fn invalidate_with_hash<Q>(&self, key: &Q, hash: u64, need_value: bool) -> Option<V>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         use futures_util::FutureExt;
 
@@ -2032,7 +2023,7 @@ where
         I: for<'i> FnMut(&'i V) -> bool + Send,
     {
         self.base
-            .get_with_hash(key, hash, replace_if, false, false)
+            .get_with_hash(key.as_ref(), hash, replace_if, false, false)
             .await
             .map(Entry::into_value)
     }
@@ -2040,7 +2031,7 @@ where
     async fn get_entry(&self, key: &Arc<K>, hash: u64) -> Option<Entry<K, V>> {
         let ignore_if = None as Option<&mut fn(&V) -> bool>;
         self.base
-            .get_with_hash(key, hash, ignore_if, true, true)
+            .get_with_hash(key.as_ref(), hash, ignore_if, true, true)
             .await
     }
 
@@ -2049,7 +2040,7 @@ where
     }
 
     async fn remove(&self, key: &Arc<K>, hash: u64) -> Option<V> {
-        self.invalidate_with_hash(key, hash, true).await
+        self.invalidate_with_hash(key.as_ref(), hash, true).await
     }
 }
 

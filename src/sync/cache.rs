@@ -18,7 +18,7 @@ use crate::{
         base_cache::{BaseCache, HouseKeeperArc},
         iter::ScanningGet,
     },
-    Entry, Policy, PredicateError,
+    Entry, Equivalent, Policy, PredicateError,
 };
 
 use crossbeam_channel::{Sender, TrySendError};
@@ -771,16 +771,14 @@ where
     /// on the borrowed form _must_ match those for the key type.
     pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         self.base.contains_key_with_hash(key, self.base.hash(key))
     }
 
     pub(crate) fn contains_key_with_hash<Q>(&self, key: &Q, hash: u64) -> bool
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         self.base.contains_key_with_hash(key, hash)
     }
@@ -797,8 +795,7 @@ where
     /// [rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
     pub fn get<Q>(&self, key: &Q) -> Option<V>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         self.base
             .get_with_hash(key, self.base.hash(key), false)
@@ -807,8 +804,7 @@ where
 
     pub(crate) fn get_with_hash<Q>(&self, key: &Q, hash: u64, need_key: bool) -> Option<Entry<K, V>>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         self.base.get_with_hash(key, hash, need_key)
     }
@@ -997,7 +993,7 @@ where
         need_key: bool,
     ) -> Entry<K, V> {
         self.base
-            .get_with_hash_and_ignore_if(&key, hash, replace_if.as_mut(), need_key)
+            .get_with_hash_and_ignore_if(key.as_ref(), hash, replace_if.as_mut(), need_key)
             .unwrap_or_else(|| self.insert_with_hash_and_fun(key, hash, init, replace_if, need_key))
     }
 
@@ -1036,7 +1032,7 @@ where
     ) -> Entry<K, V> {
         let get = || {
             self.base
-                .get_with_hash_without_recording(&key, hash, replace_if.as_mut())
+                .get_with_hash_without_recording(key.as_ref(), hash, replace_if.as_mut())
         };
         let insert = |v| self.insert_with_hash(key.clone(), hash, v);
 
@@ -1068,7 +1064,7 @@ where
         hash: u64,
         init: impl FnOnce() -> V,
     ) -> Entry<K, V> {
-        match self.base.get_with_hash(&key, hash, true) {
+        match self.base.get_with_hash(key.as_ref(), hash, true) {
             Some(entry) => entry,
             None => {
                 let value = init();
@@ -1218,7 +1214,7 @@ where
     where
         F: FnOnce() -> Option<V>,
     {
-        let entry = self.get_with_hash(&key, hash, need_key);
+        let entry = self.get_with_hash(key.as_ref(), hash, need_key);
         if entry.is_some() {
             return entry;
         }
@@ -1260,7 +1256,7 @@ where
         let get = || {
             let ignore_if = None as Option<&mut fn(&V) -> bool>;
             self.base
-                .get_with_hash_without_recording(&key, hash, ignore_if)
+                .get_with_hash_without_recording(key.as_ref(), hash, ignore_if)
         };
         let insert = |v| self.insert_with_hash(key.clone(), hash, v);
 
@@ -1412,7 +1408,7 @@ where
         F: FnOnce() -> Result<V, E>,
         E: Send + Sync + 'static,
     {
-        if let Some(entry) = self.get_with_hash(&key, hash, need_key) {
+        if let Some(entry) = self.get_with_hash(key.as_ref(), hash, need_key) {
             return Ok(entry);
         }
 
@@ -1454,7 +1450,7 @@ where
         let get = || {
             let ignore_if = None as Option<&mut fn(&V) -> bool>;
             self.base
-                .get_with_hash_without_recording(&key, hash, ignore_if)
+                .get_with_hash_without_recording(key.as_ref(), hash, ignore_if)
         };
         let insert = |v| self.insert_with_hash(key.clone(), hash, v);
 
@@ -1566,8 +1562,7 @@ where
     /// on the borrowed form _must_ match those for the key type.
     pub fn invalidate<Q>(&self, key: &Q)
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         let hash = self.base.hash(key);
         self.invalidate_with_hash(key, hash, false);
@@ -1582,8 +1577,7 @@ where
     /// on the borrowed form _must_ match those for the key type.
     pub fn remove<Q>(&self, key: &Q) -> Option<V>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         let hash = self.base.hash(key);
         self.invalidate_with_hash(key, hash, true)
@@ -1591,8 +1585,7 @@ where
 
     pub(crate) fn invalidate_with_hash<Q>(&self, key: &Q, hash: u64, need_value: bool) -> Option<V>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         // Lock the key for removal if blocking removal notification is enabled.
         let mut kl = None;
@@ -1857,7 +1850,7 @@ where
     fn get_entry(&self, key: &Arc<K>, hash: u64) -> Option<Entry<K, V>> {
         let ignore_if = None as Option<&mut fn(&V) -> bool>;
         self.base
-            .get_with_hash_and_ignore_if(key, hash, ignore_if, true)
+            .get_with_hash_and_ignore_if(key.as_ref(), hash, ignore_if, true)
     }
 
     fn insert(&self, key: Arc<K>, hash: u64, value: V) {
@@ -1865,7 +1858,7 @@ where
     }
 
     fn remove(&self, key: &Arc<K>, hash: u64) -> Option<V> {
-        self.invalidate_with_hash(key, hash, true)
+        self.invalidate_with_hash(key.as_ref(), hash, true)
     }
 }
 
@@ -1913,7 +1906,7 @@ mod tests {
         common::{time::Clock, HousekeeperConfig},
         notification::RemovalCause,
         policy::{test_utils::ExpiryCallCounters, EvictionPolicy},
-        Expiry,
+        Equivalent, Expiry,
     };
 
     use parking_lot::Mutex;
@@ -5121,6 +5114,74 @@ mod tests {
         assert!(debug_str.contains(r#"'b': "bob""#));
         assert!(debug_str.contains(r#"'c': "cindy""#));
         assert!(debug_str.ends_with('}'));
+    }
+
+    #[test]
+    fn test_equivalent_keys() {
+        #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+        struct Key {
+            id: u32,
+            values: Vec<String>,
+            variant: Variant,
+        }
+
+        #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+        enum Variant {
+            Single(String),
+            Composite(Vec<String>),
+        }
+
+        #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+        struct KeyRef<'a> {
+            id: &'a u32,
+            values: &'a [&'a str],
+            variant: VariantRef<'a>,
+        }
+
+        #[derive(Debug, Clone, Hash, PartialEq, Eq)]
+        enum VariantRef<'a> {
+            Single(&'a str),
+            Composite(&'a [&'a str]),
+        }
+
+        impl<'a> Equivalent<Key> for KeyRef<'a> {
+            fn equivalent(&self, key: &Key) -> bool {
+                self.id == &key.id
+                    && self.values == key.values
+                    && match (&self.variant, &key.variant) {
+                        (VariantRef::Single(v1), Variant::Single(v2)) => v1 == v2,
+                        (VariantRef::Composite(v1), Variant::Composite(v2)) => v1 == v2,
+                        _ => false,
+                    }
+            }
+        }
+
+        const MAX_CAPACITY: u32 = 500;
+
+        let mut cache = Cache::builder().max_capacity(MAX_CAPACITY as u64).build();
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        let values = ["hello", "world", "!"];
+
+        let key = Key {
+            id: 123,
+            values: values.iter().map(|&t| t.to_owned()).collect(),
+            variant: Variant::Single("json".to_owned()),
+        };
+
+        cache.insert(key, 321);
+
+        let key_ref = KeyRef {
+            id: &123,
+            values: &values,
+            variant: VariantRef::Single("json"),
+        };
+
+        assert!(cache.contains_key(&key_ref));
+        assert_eq!(cache.get(&key_ref).unwrap(), 321);
     }
 
     type NotificationTuple<K, V> = (Arc<K>, V, RemovalCause);

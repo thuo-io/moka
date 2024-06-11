@@ -27,7 +27,7 @@ use crate::{
     },
     notification::{notifier::RemovalNotifier, EvictionListener, RemovalCause},
     policy::{EvictionPolicy, EvictionPolicyConfig, ExpirationPolicy},
-    Entry, Expiry, Policy, PredicateError,
+    Entry, Equivalent, Expiry, Policy, PredicateError,
 };
 
 use crossbeam_channel::{Receiver, Sender, TrySendError};
@@ -35,7 +35,6 @@ use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::{Mutex, RwLock};
 use smallvec::SmallVec;
 use std::{
-    borrow::Borrow,
     collections::hash_map::RandomState,
     hash::{BuildHasher, Hash, Hasher},
     rc::Rc,
@@ -186,16 +185,14 @@ where
     #[inline]
     pub(crate) fn hash<Q>(&self, key: &Q) -> u64
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         self.inner.hash(key)
     }
 
     pub(crate) fn contains_key_with_hash<Q>(&self, key: &Q, hash: u64) -> bool
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         // TODO: Maybe we can just call ScanningGet::scanning_get.
         self.inner
@@ -214,8 +211,7 @@ where
 
     pub(crate) fn get_with_hash<Q>(&self, key: &Q, hash: u64, need_key: bool) -> Option<Entry<K, V>>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         // Define a closure to record a read op.
         let record = |op, now| {
@@ -234,8 +230,7 @@ where
         need_key: bool,
     ) -> Option<Entry<K, V>>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
         I: FnMut(&V) -> bool,
     {
         // Define a closure to record a read op.
@@ -253,8 +248,7 @@ where
         ignore_if: Option<&mut I>,
     ) -> Option<V>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
         I: FnMut(&V) -> bool,
     {
         // Define a closure that skips to record a read op.
@@ -272,8 +266,7 @@ where
         need_key: bool,
     ) -> Option<Entry<K, V>>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
         R: Fn(ReadOp<K, V>, Instant),
         I: FnMut(&V) -> bool,
     {
@@ -373,8 +366,7 @@ where
 
     pub(crate) fn get_key_with_hash<Q>(&self, key: &Q, hash: u64) -> Option<Arc<K>>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         self.inner
             .get_key_value_and(key, hash, |k, _entry| Arc::clone(k))
@@ -383,8 +375,7 @@ where
     #[inline]
     pub(crate) fn remove_entry<Q>(&self, key: &Q, hash: u64) -> Option<KvEntry<K, V>>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         self.inner.remove_entry(key, hash)
     }
@@ -433,24 +424,25 @@ where
     }
 
     fn scanning_get(&self, key: &Arc<K>) -> Option<V> {
-        let hash = self.hash(key);
-        self.inner.get_key_value_and_then(key, hash, |k, entry| {
-            let i = &self.inner;
-            let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), &i.valid_after());
-            let now = self.current_time_from_expiration_clock();
+        let hash = self.hash(key.as_ref());
+        self.inner
+            .get_key_value_and_then(key.as_ref(), hash, |k, entry| {
+                let i = &self.inner;
+                let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), &i.valid_after());
+                let now = self.current_time_from_expiration_clock();
 
-            if is_expired_by_per_entry_ttl(entry.entry_info(), now)
-                || is_expired_entry_wo(ttl, va, entry, now)
-                || is_expired_entry_ao(tti, va, entry, now)
-                || i.is_invalidated_entry(k, entry)
-            {
-                // Expired or invalidated entry.
-                None
-            } else {
-                // Valid entry.
-                Some(entry.value.clone())
-            }
-        })
+                if is_expired_by_per_entry_ttl(entry.entry_info(), now)
+                    || is_expired_entry_wo(ttl, va, entry, now)
+                    || is_expired_entry_ao(tti, va, entry, now)
+                    || i.is_invalidated_entry(k, entry)
+                {
+                    // Expired or invalidated entry.
+                    None
+                } else {
+                    // Valid entry.
+                    Some(entry.value.clone())
+                }
+            })
     }
 
     fn keys(&self, cht_segment: usize) -> Option<Vec<Arc<K>>> {
@@ -943,6 +935,16 @@ impl<K, V, S> Drop for Inner<K, V, S> {
     }
 }
 
+/// Ensures that a single closure type across uses of this which, in turn prevents multiple
+/// instances of any functions like RawTable::reserve from being generated
+#[cfg_attr(feature = "inline-more", inline)]
+fn equivalent<Q, K>(k: &Q) -> impl Fn(&K) -> bool + '_
+where
+    Q: ?Sized + Equivalent<K>,
+{
+    move |x| k.equivalent(x)
+}
+
 //
 // functions/methods used by BaseCache
 //
@@ -1127,8 +1129,7 @@ where
     #[inline]
     fn hash<Q>(&self, key: &Q) -> u64
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
         let mut hasher = self.build_hasher.build_hasher();
         key.hash(&mut hasher);
@@ -1138,33 +1139,33 @@ where
     #[inline]
     fn get_key_value_and<Q, F, T>(&self, key: &Q, hash: u64, with_entry: F) -> Option<T>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
         F: FnOnce(&Arc<K>, &TrioArc<ValueEntry<K, V>>) -> T,
     {
+        let equivalent = equivalent(key);
         self.cache
-            .get_key_value_and(hash, |k| (k as &K).borrow() == key, with_entry)
+            .get_key_value_and(hash, |k| equivalent(k as &K), with_entry)
     }
 
     #[inline]
     fn get_key_value_and_then<Q, F, T>(&self, key: &Q, hash: u64, with_entry: F) -> Option<T>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
         F: FnOnce(&Arc<K>, &TrioArc<ValueEntry<K, V>>) -> Option<T>,
     {
+        let equivalent = equivalent(key);
         self.cache
-            .get_key_value_and_then(hash, |k| (k as &K).borrow() == key, with_entry)
+            .get_key_value_and_then(hash, |k| equivalent(k as &K), with_entry)
     }
 
     #[inline]
     fn remove_entry<Q>(&self, key: &Q, hash: u64) -> Option<KvEntry<K, V>>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Hash + ?Sized + Equivalent<K>,
     {
+        let equivalent = equivalent(key);
         self.cache
-            .remove_entry(hash, |k| (k as &K).borrow() == key)
+            .remove_entry(hash, |k| equivalent(k as &K))
             .map(|(key, entry)| KvEntry::new(key, entry))
     }
 
@@ -2123,7 +2124,8 @@ where
         deq: &mut Deque<KeyHashDate<K>>,
         write_order_deq: &mut Deque<KeyHashDate<K>>,
     ) {
-        if let Some(entry) = self.cache.get(hash, |k| (k.borrow() as &K) == key) {
+        let equivalent = equivalent(key);
+        if let Some(entry) = self.cache.get(hash, |k| equivalent(k as &K)) {
             // The key exists and the entry may have been read or updated by other
             // thread.
             Deques::move_to_back_ao_in_deque(deq_name, deq, &entry);
@@ -2141,7 +2143,8 @@ where
 
     #[inline]
     fn skip_updated_entry_wo(&self, key: &K, hash: u64, deqs: &mut Deques<K>) {
-        if let Some(entry) = self.cache.get(hash, |k| (k.borrow() as &K) == key) {
+        let equivalent = equivalent(key);
+        if let Some(entry) = self.cache.get(hash, |k| equivalent(k as &K)) {
             // The key exists and the entry may have been read or updated by other
             // thread.
             deqs.move_to_back_ao(&entry);
@@ -2264,7 +2267,7 @@ where
                     if !kd.is_dirty() {
                         if let Some(ts) = kd.last_modified() {
                             let key = kd.key();
-                            let hash = self.hash(key);
+                            let hash = self.hash(key.as_ref());
                             candidates.push(KeyDateLite::new(key, hash, ts));
                             len += 1;
                         }
