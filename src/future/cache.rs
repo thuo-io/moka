@@ -5,7 +5,7 @@ use super::{
     WriteOp,
 };
 use crate::{
-    common::concurrent::Weigher,
+    common::{concurrent::Weigher, HousekeeperConfig},
     notification::AsyncEvictionListener,
     ops::compute::{self, CompResult},
     policy::{EvictionPolicy, ExpirationPolicy},
@@ -200,7 +200,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 /// // futures-util = "0.3"
 ///
-/// use std::convert::TryInto;
 /// use moka::future::Cache;
 ///
 /// #[tokio::main]
@@ -314,9 +313,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// //
 /// // [dependencies]
 /// // moka = { version = "0.12", features = ["future"] }
-/// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
+/// // tokio = { version = "1", features = ["rt-multi-thread", "macros", "time" ] }
 ///
-/// use moka::{future::{Cache, FutureExt}, Expiry, notification::ListenerFuture};
+/// use moka::{future::Cache, Expiry};
 /// use std::time::{Duration, Instant};
 ///
 /// // In this example, we will create a `future::Cache` with `u32` as the key, and
@@ -404,6 +403,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///     // Sleep for 6 seconds. Key 0 should expire.
 ///     println!("\nSleeping for 6 seconds...\n");
 ///     tokio::time::sleep(Duration::from_secs(6)).await;
+///     cache.run_pending_tasks().await;
 ///     println!("Entry count: {}", cache.entry_count());
 ///
 ///     // Verify that key 0 has been evicted.
@@ -414,6 +414,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///     // Sleep for 10 more seconds. Key 1 should expire.
 ///     println!("\nSleeping for 10 seconds...\n");
 ///     tokio::time::sleep(Duration::from_secs(10)).await;
+///     cache.run_pending_tasks().await;
 ///     println!("Entry count: {}", cache.entry_count());
 ///
 ///     // Verify that key 1 has been evicted.
@@ -426,6 +427,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///
 ///     println!("\nSleeping for a second...\n");
 ///     tokio::time::sleep(Duration::from_secs(1)).await;
+///     cache.run_pending_tasks().await;
 ///     println!("Entry count: {}", cache.entry_count());
 ///
 ///     println!("\nDone!");
@@ -790,6 +792,7 @@ where
             EvictionPolicy::default(),
             None,
             ExpirationPolicy::default(),
+            HousekeeperConfig::default(),
             false,
         )
     }
@@ -820,6 +823,7 @@ where
         eviction_policy: EvictionPolicy,
         eviction_listener: Option<AsyncEvictionListener<K, V>>,
         expiration_policy: ExpirationPolicy<K, V>,
+        housekeeper_config: HousekeeperConfig,
         invalidator_enabled: bool,
     ) -> Self {
         Self {
@@ -832,6 +836,7 @@ where
                 eviction_policy,
                 eviction_listener,
                 expiration_policy,
+                housekeeper_config,
                 invalidator_enabled,
             ),
             value_initializer: Arc::new(ValueInitializer::with_hasher(build_hasher)),
@@ -1813,12 +1818,12 @@ where
         }
 
         let hk = self.base.housekeeper.as_ref();
-        let lock = self.base.maintenance_task_lock();
+        let event = self.base.write_op_ch_ready_event();
 
         BaseCache::<K, V, S>::schedule_write_op(
             &self.base.inner,
             &self.base.write_op_ch,
-            lock,
+            event,
             op,
             ts,
             hk,
@@ -1978,13 +1983,13 @@ where
                     should_block = self.schedule_write_op_should_block.load(Ordering::Acquire);
                 }
 
-                let lock = self.base.maintenance_task_lock();
+                let event = self.base.write_op_ch_ready_event();
                 let hk = self.base.housekeeper.as_ref();
 
                 BaseCache::<K, V, S>::schedule_write_op(
                     &self.base.inner,
                     &self.base.write_op_ch,
-                    lock,
+                    event,
                     op,
                     now,
                     hk,
@@ -2105,7 +2110,7 @@ fn never_ignore<'a, V>() -> Option<&'a mut fn(&V) -> bool> {
 mod tests {
     use super::Cache;
     use crate::{
-        common::time::Clock,
+        common::{time::Clock, HousekeeperConfig},
         future::FutureExt,
         notification::{ListenerFuture, RemovalCause},
         ops::compute,
@@ -2117,7 +2122,7 @@ mod tests {
     use std::{
         convert::Infallible,
         sync::{
-            atomic::{AtomicU32, Ordering},
+            atomic::{AtomicU32, AtomicU8, Ordering},
             Arc,
         },
         time::{Duration, Instant as StdInstant},
@@ -5093,6 +5098,160 @@ mod tests {
         assert_eq!(cache.entry_count(), 0);
 
         verify_notification_vec(&cache, actual, &expected).await;
+    }
+
+    // When the eviction listener is not set, calling `run_pending_tasks` once should
+    // evict all entries that can be removed.
+    #[tokio::test]
+    async fn no_batch_size_limit_on_eviction() {
+        const MAX_CAPACITY: u64 = 20;
+
+        const EVICTION_TIMEOUT: Duration = Duration::from_nanos(0);
+        const MAX_LOG_SYNC_REPEATS: u32 = 1;
+        const EVICTION_BATCH_SIZE: u32 = 1;
+
+        let hk_conf = HousekeeperConfig::new(
+            // Timeout should be ignored when the eviction listener is not provided.
+            Some(EVICTION_TIMEOUT),
+            Some(MAX_LOG_SYNC_REPEATS),
+            Some(EVICTION_BATCH_SIZE),
+        );
+
+        // Create a cache with the LRU policy.
+        let mut cache = Cache::builder()
+            .max_capacity(MAX_CAPACITY)
+            .eviction_policy(EvictionPolicy::lru())
+            .housekeeper_config(hk_conf)
+            .build();
+        cache.reconfigure_for_testing().await;
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        // Fill the cache.
+        for i in 0..MAX_CAPACITY {
+            let v = format!("v{i}");
+            cache.insert(i, v).await
+        }
+        // The max capacity should not change because we have not called
+        // `run_pending_tasks` yet.
+        assert_eq!(cache.entry_count(), 0);
+
+        cache.run_pending_tasks().await;
+        assert_eq!(cache.entry_count(), MAX_CAPACITY);
+
+        // Insert more items to the cache.
+        for i in MAX_CAPACITY..(MAX_CAPACITY * 2) {
+            let v = format!("v{i}");
+            cache.insert(i, v).await
+        }
+        // The max capacity should not change because we have not called
+        // `run_pending_tasks` yet.
+        assert_eq!(cache.entry_count(), MAX_CAPACITY);
+        // Both old and new keys should exist.
+        assert!(cache.contains_key(&0)); // old
+        assert!(cache.contains_key(&(MAX_CAPACITY - 1))); // old
+        assert!(cache.contains_key(&(MAX_CAPACITY * 2 - 1))); // new
+
+        // Process the remaining write op logs (there should be MAX_CAPACITY logs),
+        // and evict the LRU entries.
+        cache.run_pending_tasks().await;
+        assert_eq!(cache.entry_count(), MAX_CAPACITY);
+
+        // Now all the old keys should be gone.
+        assert!(!cache.contains_key(&0));
+        assert!(!cache.contains_key(&(MAX_CAPACITY - 1)));
+        // And the new keys should exist.
+        assert!(cache.contains_key(&(MAX_CAPACITY * 2 - 1)));
+    }
+
+    #[tokio::test]
+    async fn slow_eviction_listener() {
+        const MAX_CAPACITY: u64 = 20;
+
+        const EVICTION_TIMEOUT: Duration = Duration::from_millis(30);
+        const LISTENER_DELAY: Duration = Duration::from_millis(11);
+        const MAX_LOG_SYNC_REPEATS: u32 = 1;
+        const EVICTION_BATCH_SIZE: u32 = 1;
+
+        let hk_conf = HousekeeperConfig::new(
+            Some(EVICTION_TIMEOUT),
+            Some(MAX_LOG_SYNC_REPEATS),
+            Some(EVICTION_BATCH_SIZE),
+        );
+
+        let (clock, mock) = Clock::mock();
+        let listener_call_count = Arc::new(AtomicU8::new(0));
+        let lcc = Arc::clone(&listener_call_count);
+
+        // A slow eviction listener that spend `LISTENER_DELAY` to process a removal
+        // notification.
+        let listener = move |_k, _v, _cause| {
+            mock.increment(LISTENER_DELAY);
+            lcc.fetch_add(1, Ordering::AcqRel);
+        };
+
+        // Create a cache with the LRU policy.
+        let mut cache = Cache::builder()
+            .max_capacity(MAX_CAPACITY)
+            .eviction_policy(EvictionPolicy::lru())
+            .eviction_listener(listener)
+            .housekeeper_config(hk_conf)
+            .build();
+        cache.reconfigure_for_testing().await;
+        cache.set_expiration_clock(Some(clock)).await;
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        // Fill the cache.
+        for i in 0..MAX_CAPACITY {
+            let v = format!("v{i}");
+            cache.insert(i, v).await
+        }
+        // The max capacity should not change because we have not called
+        // `run_pending_tasks` yet.
+        assert_eq!(cache.entry_count(), 0);
+
+        cache.run_pending_tasks().await;
+        assert_eq!(listener_call_count.load(Ordering::Acquire), 0);
+        assert_eq!(cache.entry_count(), MAX_CAPACITY);
+
+        // Insert more items to the cache.
+        for i in MAX_CAPACITY..(MAX_CAPACITY * 2) {
+            let v = format!("v{i}");
+            cache.insert(i, v).await
+        }
+        assert_eq!(cache.entry_count(), MAX_CAPACITY);
+
+        cache.run_pending_tasks().await;
+        // Because of the slow listener, cache should get an over capacity.
+        let mut expected_call_count = 3;
+        assert_eq!(
+            listener_call_count.load(Ordering::Acquire) as u64,
+            expected_call_count
+        );
+        assert_eq!(cache.entry_count(), MAX_CAPACITY * 2 - expected_call_count);
+
+        loop {
+            cache.run_pending_tasks().await;
+
+            expected_call_count += 3;
+            if expected_call_count > MAX_CAPACITY {
+                expected_call_count = MAX_CAPACITY;
+            }
+
+            let actual_count = listener_call_count.load(Ordering::Acquire) as u64;
+            assert_eq!(actual_count, expected_call_count);
+            let expected_entry_count = MAX_CAPACITY * 2 - expected_call_count;
+            assert_eq!(cache.entry_count(), expected_entry_count);
+
+            if expected_call_count >= MAX_CAPACITY {
+                break;
+            }
+        }
+
+        assert_eq!(cache.entry_count(), MAX_CAPACITY);
     }
 
     // NOTE: To enable the panic logging, run the following command:
